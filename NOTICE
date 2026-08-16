@@ -1,0 +1,25 @@
+M5Stack StopWatch + Codex Micro
+================================
+
+This distribution combines and modifies software from these MIT-licensed
+projects:
+
+1. M5StopWatch-UserDemo
+   https://github.com/m5stack/M5StopWatch-UserDemo
+   Copyright (c) 2026 M5Stack Technology CO LTD
+
+2. codex-micro-stopwatch
+   https://github.com/digitsisyph/codex-micro-stopwatch
+   Copyright (c) 2026 imliubo
+   Copyright (c) 2026 codex-micro-4-stopwatch contributors
+
+3. Codex Micro for StopWatch integration changes
+   Copyright (c) 2026 Codex Micro for StopWatch contributors
+
+The full MIT terms are in LICENSE. Third-party components downloaded into the
+components directory retain the notices and license files distributed with
+those components.
+
+This experimental compatibility layer is not an official product of, or
+endorsed by, M5Stack, OpenAI, or Work Louder. Product names and trademarks are
+the property of their respective owners.

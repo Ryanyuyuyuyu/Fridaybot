@@ -8,6 +8,9 @@ file(GLOB_RECURSE MY_SRCS
     "hal/*.c"
     "hal/*.cc"
     "hal/*.cpp"
+    "services/*.c"
+    "services/*.cc"
+    "services/*.cpp"
 )
 
 set(MY_INCS

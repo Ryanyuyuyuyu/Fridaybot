@@ -17,7 +17,8 @@
     {
         "url": "https://github.com/m5stack/M5GFX.git",
         "path": "components/M5GFX",
-        "branch": "0.2.19"
+        "branch": "0.2.19",
+        "patch": "patches/M5GFX.patch"
     },
     {
         "url": "https://github.com/bblanchon/ArduinoJson.git",
