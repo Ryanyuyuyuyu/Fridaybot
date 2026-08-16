@@ -3,17 +3,17 @@
 [English](README.md)
 
 这个分支把兼容 Codex Micro 的控制界面作为一个普通 App 集成进 M5Stack
-原厂风格的 StopWatch launcher。原有 App 会保留；Codex 页面也能在设备本地
-退出并回到 launcher。
+原厂风格的 StopWatch launcher。同一个 App 现在包含相互平行的 Codex 与 Chat
+两套界面；原有 App 仍会保留。
 
 > [!WARNING]
 > 这是仅面向 **M5Stack StopWatch Dev Kit C152** 的实验性、非官方兼容层，
 > 未获 M5Stack、OpenAI 或 Work Louder 背书。Codex Micro 协议不是公开、稳定的
 > API，后续可能变化。编译成功不等于已经在真机上验证了蓝牙、按键、电源或恢复流程。
 
-当前版本已在一台 C152 真机上验证冷启动、原厂风格 launcher、Codex
-Micro 界面与控制、BLE 连接、中央 Send，以及 A+B 返回 launcher。未来
-ChatGPT Desktop 或协议更新仍可能影响兼容性。
+此前的纯 Codex 基线已在一台 C152 真机上验证冷启动、原厂风格 launcher、
+Codex Micro 控制、BLE 连接、中央 Send，以及 A+B 返回 launcher。本次新增的
+双界面版本只进行了主机单元测试与完整固件编译，尚未刷入真机。
 
 ## 按键与触控
 
@@ -21,11 +21,12 @@ ChatGPT Desktop 或协议更新仍可能影响兼容性。
 
 | StopWatch 操作 | 上报控制 | 行为 / 建议电脑端设置 |
 | --- | --- | --- |
-| 按住实体 **A** | `ACT10` | 按住说话，松开停止 |
+| 双击实体 **A** | 本地模式操作 | 在 Codex 与 Chat 界面间切换，不增加屏幕按钮 |
+| 按住实体 **A** | `ACT10` | 约 180 ms 手势判定后开始按住说话，松开停止 |
 | 按下再松开实体 **B** | `ACT09` | 一次短命令脉冲；可设为语音对话 |
 | 点击 **A1-A6** | `AG00-AG05` | 打开或聚焦电脑端指定的六个 Agent 对话 |
-| 点击中间配额 / **SEND** | `ACT12` | 发送当前输入框消息 |
-| 向上、右、下、左滑动 | 四个模拟摇杆方向 | 四项功能分别由电脑端配置 |
+| 在 Codex 模式点击中间配额 / **SEND** | `ACT12` | 发送当前输入框消息；Chat 模式在宿主定位完成前只做本地预览 |
+| 在 Codex 模式向上、右、下、左滑动 | 四个模拟摇杆方向 | 四项功能分别由电脑端配置；Chat 模式会主动忽略滑动 |
 | 同时按住实体 **A+B** 约 500 ms | 本地 launcher 操作 | 释放所有控制，只关闭本 App，并回到原厂 launcher |
 
 如需让 A1-A6 固定对应某些对话，请在 ChatGPT Desktop 中选择
@@ -35,6 +36,25 @@ A1-A6 是槽位编号；当前蓝牙数据不包含项目名或对话名，所�
 A+B 完全由 StopWatch 本地处理：它不会向 ChatGPT 发送“返回”，也不会退出 Mac
 上的 ChatGPT。BLE 服务属于整个设备进程，因此离开 Codex App 后仍会在后台保持；
 此时可以停留在 launcher 或打开其他原厂 App。
+
+### Chat 界面当前里程碑
+
+Chat 模式复用 Codex 的六个圆形位置和中央 Send 控件，以紫色强调色和短别名做
+轻量区分。模型支持「跨 Project 的全局最近列表 + 固定槽位」；固定槽位在一次
+运行期间不会被最近项挤走。点击某个 Chat 槽目前只会在表内选择并预览，且明确
+不会发送 `AG00-AG05`，避免误打开 Agent。中央会显示 `LOCAL PREVIEW`，在宿主
+尚未确认具体 Chat 目标前，Chat 模式也不会发送 `ACT12`，以免消息落入错误输入框。
+
+本里程碑还不能直接打开 Mac 上的 ChatGPT 普通聊天。现有宿主协议只提供六个
+Agent 状态，没有公开的 Chat 列表或稳定的 Chat 目标标识；因此真正的电脑端跳转
+需要下一阶段单独评审宿主桥接方案，不能在固件里猜测一个控制编号。
+
+仓库默认只带无隐私的示例元数据。如需测试自己的短别名，可把
+`main/apps/app_codex_micro/model/local_chat_slots.h.example` 复制为同目录下的
+`local_chat_slots.h`，修改编译期配置后重新构建；该私有文件已被 git 忽略。
+固件中只应放短别名、Project 名和标题，绝不能写入聊天 URL、conversation ID、
+Cookie 或凭据。标签目前只接受较短的可打印 ASCII 字符。Git 忽略只能避免源码被
+误提交；选中的元数据仍会编译进固件镜像，并不是设备端加密存储。
 
 ## 蓝牙重新配对
 
@@ -79,7 +99,10 @@ idf.py build
 
 ## 实现结构
 
-- Codex UI 是一个标准 Mooncake `AppAbility`，与原厂 App 一起注册。
+- Codex/Chat 仍是同一个标准 Mooncake `AppAbility`，与原厂 App 一起注册；模式
+  切换不会创建第二个 launcher App。
+- 纯 C++ 模型负责区分 A 键双击与 PTT 长按，并组合六个 Chat 槽，可在不依赖
+  LVGL 和真机的情况下做主机回归测试。
 - 原生 ESP-IDF Bluedroid 服务独立于 UI 生命周期，在后台维持 BLE。
 - LVGL 回调只把触摸意图加入队列，由 App 主循环发送 BLE，并为每次按下配对松开。
 - A+B 沿用原厂 `KeyManager` 的 Home 手势，通过本地 App `close()` 返回 launcher。

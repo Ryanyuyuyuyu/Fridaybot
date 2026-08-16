@@ -21,6 +21,9 @@ constexpr uint32_t kPrimaryText     = 0xE8EEF5;
 constexpr uint32_t kSecondaryText   = 0x7D8A98;
 constexpr uint32_t kTrackColor      = 0x26323D;
 constexpr uint32_t kAccentColor     = 0x12D6B2;
+constexpr uint32_t kChatAccentColor = 0xA78BFA;
+constexpr uint32_t kChatPanelColor  = 0x211B35;
+constexpr uint32_t kChatMutedText   = 0xB9A9E8;
 constexpr size_t kIntentQueueDepth  = 24;
 
 enum class AgentStatus : uint8_t {
@@ -181,11 +184,17 @@ bool DashboardView::init(lv_obj_t* parent)
 
     _quota_label = lv_label_create(_quota_button);
     makeTransparentLabel(_quota_label, &lv_font_montserrat_36, kPrimaryText);
+    lv_obj_set_size(_quota_label, 166, lv_font_get_line_height(&lv_font_montserrat_36));
+    lv_label_set_long_mode(_quota_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(_quota_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_text(_quota_label, "--");
     lv_obj_align(_quota_label, LV_ALIGN_CENTER, 0, -29);
 
     _reset_label = lv_label_create(_quota_button);
     makeTransparentLabel(_reset_label, &lv_font_montserrat_16, kSecondaryText);
+    lv_obj_set_size(_reset_label, 174, lv_font_get_line_height(&lv_font_montserrat_16));
+    lv_label_set_long_mode(_reset_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(_reset_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_text(_reset_label, "QUOTA WAITING");
     lv_obj_align(_reset_label, LV_ALIGN_CENTER, 0, 9);
 
@@ -228,6 +237,9 @@ bool DashboardView::init(lv_obj_t* parent)
         auto* label      = lv_label_create(button);
         _agent_labels[i] = label;
         makeTransparentLabel(label, &lv_font_montserrat_22, kPrimaryText);
+        lv_obj_set_size(label, 92, lv_font_get_line_height(&lv_font_montserrat_22));
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         char agent_name[4] = {};
         std::snprintf(agent_name, sizeof(agent_name), "A%u", static_cast<unsigned>(i + 1));
         lv_label_set_text(label, agent_name);
@@ -252,6 +264,14 @@ bool DashboardView::popIntent(TouchIntent& intent)
     return _intent_queue != nullptr && xQueueReceive(_intent_queue, &intent, 0) == pdTRUE;
 }
 
+void DashboardView::beginModeTransition(bool touchActive)
+{
+    if (_intent_queue != nullptr) {
+        xQueueReset(_intent_queue);
+    }
+    _discard_touch_until_release = touchActive;
+}
+
 void DashboardView::update(const DashboardModel& model)
 {
     if (_root == nullptr) {
@@ -261,12 +281,52 @@ void DashboardView::update(const DashboardModel& model)
     lv_label_set_text(_connection_label, model.connectionText.c_str());
     lv_obj_set_style_text_color(_connection_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
     lv_label_set_text(_battery_label, model.batteryText.c_str());
-    lv_label_set_text(_quota_label, model.quotaText.c_str());
-    lv_label_set_text(_reset_label, model.resetText.c_str());
-    lv_obj_set_style_border_color(_quota_button, lv_color_hex(model.quotaAvailable ? kAccentColor : kTrackColor),
-                                  LV_PART_MAIN);
+    if (model.mode == codex_micro_app::model::DashboardMode::Chat) {
+        const ChatSlotVisual* selected = nullptr;
+        for (const auto& chat : model.chats) {
+            if (chat.available && chat.selected) {
+                selected = &chat;
+                break;
+            }
+        }
+        lv_obj_set_style_text_font(_quota_label, &lv_font_montserrat_28, LV_PART_MAIN);
+        lv_label_set_text(_quota_label, selected != nullptr ? selected->title.c_str() : "NO CHATS");
+        lv_label_set_text(_reset_label, selected != nullptr ? selected->project.c_str() : "ADD LOCAL SLOTS");
+        lv_label_set_text(_send_label, "LOCAL PREVIEW");
+        lv_obj_set_style_text_color(_send_label, lv_color_hex(kChatAccentColor), LV_PART_MAIN);
+        lv_obj_set_style_border_color(_quota_button, lv_color_hex(selected != nullptr ? kChatAccentColor : kTrackColor),
+                                      LV_PART_MAIN);
+    } else {
+        lv_obj_set_style_text_font(_quota_label, &lv_font_montserrat_36, LV_PART_MAIN);
+        lv_label_set_text(_quota_label, model.quotaText.c_str());
+        lv_label_set_text(_reset_label, model.resetText.c_str());
+        lv_label_set_text(_send_label, "TAP TO SEND");
+        lv_obj_set_style_text_color(_send_label, lv_color_hex(kAccentColor), LV_PART_MAIN);
+        lv_obj_set_style_border_color(_quota_button, lv_color_hex(model.quotaAvailable ? kAccentColor : kTrackColor),
+                                      LV_PART_MAIN);
+    }
 
     for (size_t i = 0; i < _agent_buttons.size(); ++i) {
+        if (model.mode == codex_micro_app::model::DashboardMode::Chat) {
+            const auto& chat     = model.chats[i];
+            const uint32_t fill  = chat.available ? (chat.selected ? 0x6552C7 : kChatPanelColor) : kPanelColor;
+            const uint32_t edge  = chat.available ? kChatAccentColor : kTrackColor;
+            const uint32_t label = chat.selected ? kPrimaryText : (chat.available ? kChatMutedText : kSecondaryText);
+
+            lv_label_set_text(_agent_labels[i], chat.available ? chat.alias.c_str() : "--");
+            lv_obj_set_style_text_font(_agent_labels[i], &lv_font_montserrat_18, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(_agent_buttons[i], lv_color_hex(fill), LV_PART_MAIN);
+            lv_obj_set_style_border_color(_agent_buttons[i], lv_color_hex(edge), LV_PART_MAIN);
+            lv_obj_set_style_outline_color(_agent_buttons[i], lv_color_hex(kPrimaryText), LV_PART_MAIN);
+            lv_obj_set_style_outline_opa(_agent_buttons[i], chat.selected ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN);
+            lv_obj_set_style_shadow_color(_agent_buttons[i], lv_color_hex(kChatAccentColor), LV_PART_MAIN);
+            lv_obj_set_style_shadow_opa(
+                _agent_buttons[i], chat.selected ? static_cast<lv_opa_t>(70) : static_cast<lv_opa_t>(LV_OPA_TRANSP),
+                LV_PART_MAIN);
+            lv_obj_set_style_text_color(_agent_labels[i], lv_color_hex(label), LV_PART_MAIN);
+            continue;
+        }
+
         const auto& agent        = model.agents[i];
         const AgentStatus status = classifyAgent(agent);
         const float brightness   = std::clamp(agent.brightness, 0.0f, 1.0f);
@@ -288,6 +348,10 @@ void DashboardView::update(const DashboardModel& model)
             LV_PART_MAIN);
         lv_obj_set_style_text_color(_agent_labels[i], lv_color_hex(assigned ? agentLabelColor(fill) : kSecondaryText),
                                     LV_PART_MAIN);
+        char agent_name[4] = {};
+        std::snprintf(agent_name, sizeof(agent_name), "A%u", static_cast<unsigned>(i + 1));
+        lv_label_set_text(_agent_labels[i], agent_name);
+        lv_obj_set_style_text_font(_agent_labels[i], &lv_font_montserrat_22, LV_PART_MAIN);
     }
 }
 
@@ -300,6 +364,13 @@ void DashboardView::handleTouchEvent(lv_event_t* event)
 
     auto* binding = static_cast<TouchBinding*>(lv_event_get_user_data(event));
     if (binding == nullptr || binding->owner == nullptr) {
+        return;
+    }
+
+    if (binding->owner->_discard_touch_until_release) {
+        if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+            binding->owner->_discard_touch_until_release = false;
+        }
         return;
     }
 
@@ -345,6 +416,9 @@ void DashboardView::handleGestureEvent(lv_event_t* event)
     auto* owner = static_cast<DashboardView*>(lv_event_get_user_data(event));
     auto* indev = lv_indev_active();
     if (owner == nullptr || indev == nullptr) {
+        return;
+    }
+    if (owner->_discard_touch_until_release) {
         return;
     }
 

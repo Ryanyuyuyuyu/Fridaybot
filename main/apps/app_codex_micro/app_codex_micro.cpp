@@ -14,6 +14,12 @@
 #include <mooncake_log.h>
 #include <services/codex_micro/codex_micro_service.h>
 
+#if __has_include("model/local_chat_slots.h")
+#include "model/local_chat_slots.h"
+#else
+#include "model/chat_slot_config.h"
+#endif
+
 namespace {
 
 constexpr char kLeftMicKey[]                    = "ACT10";
@@ -70,6 +76,11 @@ void AppCodexMicro::onOpen()
     _key_manager           = std::make_unique<input::KeyManager>();
     _last_service_revision = UINT32_MAX;
     _last_view_update_at   = 0;
+    _chat_slots            = codex_micro_app::model::composeChatSlots(codex_micro_app::model::config::kPinnedSlots,
+                                                                      codex_micro_app::model::config::kRecentChats);
+    if (_selected_chat_slot >= _chat_slots.size() || !_chat_slots[_selected_chat_slot].available) {
+        _selected_chat_slot = codex_micro_app::model::firstAvailableChat(_chat_slots);
+    }
 
     {
         LvglLockGuard lock;
@@ -93,8 +104,14 @@ void AppCodexMicro::onRunning()
     GetHAL().updateButtonStates();
     const input::KeyEvent key_event = _key_manager ? _key_manager->update(false) : input::KeyEvent::None;
 
-    handlePhysicalButtons(now, key_event);
+    const bool mode_changed = handlePhysicalButtons(now, key_event);
     if (currentState() != StateRunning) {
+        return;
+    }
+
+    // Do not consume a release queued by the old visual mode in the same
+    // frame. The new dashboard is already refreshed by toggleDashboardMode().
+    if (mode_changed) {
         return;
     }
 
@@ -139,7 +156,7 @@ void AppCodexMicro::onDestroy()
     }
 }
 
-void AppCodexMicro::handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent)
+bool AppCodexMicro::handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent)
 {
     auto& hal                      = GetHAL();
     const bool left_pressed_edge   = hal.btnA.wasPressed();
@@ -164,20 +181,37 @@ void AppCodexMicro::handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent
             mclog::tagInfo(getAppInfo().name, "A+B hold: close to launcher");
             releaseAllControls();
             close();
-            return;
+            return false;
         }
 
         finishButtonChordIfReleased();
-        return;
+        return false;
     }
 
-    if (left_pressed_edge && !_left_mic_pressed) {
-        codex_micro::GetService().sendKey(kLeftMicKey, 1);
-        _left_mic_pressed = true;
+    if (right_pressed_edge) {
+        cancelModeButtonGesture();
     }
-    if (left_released_edge && _left_mic_pressed) {
-        codex_micro::GetService().sendKey(kLeftMicKey, 0);
-        _left_mic_pressed = false;
+
+    const auto mode_button_event =
+        _mode_button_gesture.update(now, hal.btnA.isPressed(), left_pressed_edge, left_released_edge);
+    switch (mode_button_event) {
+        case codex_micro_app::model::ModeButtonEvent::PttPress:
+            if (!_left_mic_pressed) {
+                codex_micro::GetService().sendKey(kLeftMicKey, 1);
+                _left_mic_pressed = true;
+            }
+            break;
+        case codex_micro_app::model::ModeButtonEvent::PttRelease:
+            if (_left_mic_pressed) {
+                codex_micro::GetService().sendKey(kLeftMicKey, 0);
+                _left_mic_pressed = false;
+            }
+            break;
+        case codex_micro_app::model::ModeButtonEvent::ToggleMode:
+            toggleDashboardMode(now);
+            return true;
+        case codex_micro_app::model::ModeButtonEvent::None:
+            break;
     }
 
     if (right_pressed_edge) {
@@ -196,6 +230,7 @@ void AppCodexMicro::handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent
             beginRightCommandPulse(now);
         }
     }
+    return false;
 }
 
 void AppCodexMicro::beginButtonChord()
@@ -214,6 +249,49 @@ void AppCodexMicro::finishButtonChordIfReleased()
     _button_chord_canceled = false;
 }
 
+void AppCodexMicro::cancelModeButtonGesture()
+{
+    const auto event = _mode_button_gesture.cancel();
+    if (event == codex_micro_app::model::ModeButtonEvent::PttRelease && _left_mic_pressed) {
+        codex_micro::GetService().sendKey(kLeftMicKey, 0);
+        _left_mic_pressed = false;
+    }
+}
+
+void AppCodexMicro::toggleDashboardMode(uint32_t now)
+{
+    releaseAllControls();
+    {
+        LvglLockGuard lock;
+        if (_view) {
+            // Clear all completed old-mode intents while the LVGL task is
+            // paused. If a finger is currently down, discard the remainder of
+            // that touch sequence before accepting input for the new mode.
+            auto* touchpad          = GetHAL().lvTouchpad;
+            const bool touch_active = touchpad != nullptr && lv_indev_get_state(touchpad) == LV_INDEV_STATE_PRESSED;
+            _view->beginModeTransition(touch_active);
+        }
+    }
+    _dashboard_mode        = codex_micro_app::model::toggledMode(_dashboard_mode);
+    _last_service_revision = UINT32_MAX;
+    _last_view_update_at   = 0;
+    mclog::tagInfo(getAppInfo().name, "physical A double tap: {} mode",
+                   _dashboard_mode == codex_micro_app::model::DashboardMode::Chat ? "Chat" : "Codex");
+    GetHAL().vibrate(42, 80);
+    updateView(now, true);
+}
+
+void AppCodexMicro::selectChatSlot(int index, uint32_t now)
+{
+    if (index < 0 || index >= static_cast<int>(_chat_slots.size()) || !_chat_slots[index].available) {
+        return;
+    }
+    _selected_chat_slot  = static_cast<size_t>(index);
+    _last_view_update_at = 0;
+    mclog::tagInfo(getAppInfo().name, "Chat slot {} selected locally", index + 1);
+    updateView(now, true);
+}
+
 void AppCodexMicro::processTouchIntents(uint32_t now)
 {
     if (!_view) {
@@ -222,6 +300,9 @@ void AppCodexMicro::processTouchIntents(uint32_t now)
 
     codex_micro_app::view::TouchIntent intent;
     while (_view->popIntent(intent)) {
+        // A touch invalidates only a pending mode toggle. It must not release
+        // an active PTT session while the user is still holding physical A.
+        _mode_button_gesture.cancelPendingToggle();
         switch (intent.type) {
             case codex_micro_app::view::TouchIntentType::AgentPress:
                 if (intent.agent < 0) {
@@ -236,7 +317,11 @@ void AppCodexMicro::processTouchIntents(uint32_t now)
                 if (intent.agent < 0) {
                     releaseAllControls();
                 } else if (!_touch_gesture_consumed && _touch_agent_candidate == intent.agent) {
-                    beginAgentPulse(intent.agent, now);
+                    if (_dashboard_mode == codex_micro_app::model::DashboardMode::Chat) {
+                        selectChatSlot(intent.agent, now);
+                    } else {
+                        beginAgentPulse(intent.agent, now);
+                    }
                     GetHAL().vibrate(28, 55);
                 }
                 _touch_agent_candidate = -1;
@@ -248,7 +333,13 @@ void AppCodexMicro::processTouchIntents(uint32_t now)
                 break;
             case codex_micro_app::view::TouchIntentType::SendRelease:
                 if (!_touch_gesture_consumed && _touch_send_candidate) {
-                    beginSendPulse(now);
+                    // Until the host acknowledges a concrete Chat target,
+                    // ACT12 could send into an unrelated composer. Keep the
+                    // center control local in Chat mode and preserve the
+                    // original Codex behavior byte-for-byte.
+                    if (_dashboard_mode == codex_micro_app::model::DashboardMode::Codex) {
+                        beginSendPulse(now);
+                    }
                 }
                 _touch_send_candidate = false;
                 break;
@@ -260,8 +351,10 @@ void AppCodexMicro::processTouchIntents(uint32_t now)
                 _touch_gesture_consumed = true;
                 _touch_agent_candidate  = -1;
                 _touch_send_candidate   = false;
-                beginAnalogPulse(intent.angle, now);
-                GetHAL().vibrate(28, 50);
+                if (_dashboard_mode == codex_micro_app::model::DashboardMode::Codex) {
+                    beginAnalogPulse(intent.angle, now);
+                    GetHAL().vibrate(28, 50);
+                }
                 break;
         }
     }
@@ -316,8 +409,12 @@ void AppCodexMicro::updateView(uint32_t now, bool force)
     }
 
     codex_micro_app::view::DashboardModel model;
+    model.mode           = _dashboard_mode;
     const bool host_live = state.connected && state.hostRpcObserved && now - state.lastHostRpcAtMs <= kHostRpcLiveForMs;
-    if (!state.connected) {
+    if (_dashboard_mode == codex_micro_app::model::DashboardMode::Chat) {
+        model.connectionText  = "CHAT";
+        model.connectionColor = 0xB9A9E8;
+    } else if (!state.connected) {
         model.connectionText  = "OFFLINE";
         model.connectionColor = 0xFF7685;
     } else if (host_live) {
@@ -337,6 +434,18 @@ void AppCodexMicro::updateView(uint32_t now, bool force)
         model.agents[i].color      = state.threads[i].color;
         model.agents[i].brightness = state.threads[i].brightness;
         model.agents[i].focused    = state.threads[i].effect == "breath" || state.threads[i].speed > 0.01f;
+    }
+
+    for (size_t i = 0; i < model.chats.size(); ++i) {
+        const auto& slot         = _chat_slots[i];
+        model.chats[i].available = slot.available;
+        model.chats[i].pinned    = slot.pinned;
+        model.chats[i].selected  = slot.available && i == _selected_chat_slot;
+        if (slot.available) {
+            model.chats[i].alias   = std::string(slot.chat.alias);
+            model.chats[i].project = std::string(slot.chat.project);
+            model.chats[i].title   = std::string(slot.chat.title);
+        }
     }
 
     model.quotaAvailable = state.quota.available;
@@ -462,5 +571,6 @@ void AppCodexMicro::releaseAllControls()
     _touch_agent_candidate  = -1;
     _touch_send_candidate   = false;
     _touch_gesture_consumed = false;
+    _mode_button_gesture.reset();
     GetHAL().stopVibrate();
 }

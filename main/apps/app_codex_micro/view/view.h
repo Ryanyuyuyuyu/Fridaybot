@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <apps/app_codex_micro/model/chat_mode_model.h>
 #include <array>
 #include <cstdint>
 #include <freertos/FreeRTOS.h>
@@ -35,8 +36,19 @@ struct AgentVisual {
     bool focused     = false;
 };
 
+struct ChatSlotVisual {
+    std::string alias;
+    std::string project;
+    std::string title;
+    bool available = false;
+    bool pinned    = false;
+    bool selected  = false;
+};
+
 struct DashboardModel {
-    std::array<AgentVisual, 6> agents = {};
+    model::DashboardMode mode           = model::DashboardMode::Codex;
+    std::array<AgentVisual, 6> agents   = {};
+    std::array<ChatSlotVisual, 6> chats = {};
     std::string connectionText;
     uint32_t connectionColor = 0x7E8797;
     std::string batteryText;
@@ -55,6 +67,7 @@ public:
 
     bool init(lv_obj_t* parent = lv_screen_active());
     bool popIntent(TouchIntent& intent);
+    void beginModeTransition(bool touchActive);
     void update(const DashboardModel& model);
 
 private:
@@ -81,6 +94,7 @@ private:
     std::array<lv_obj_t*, 6> _agent_labels      = {};
     std::array<TouchBinding, 7> _touch_bindings = {};
     QueueHandle_t _intent_queue                 = nullptr;
+    bool _discard_touch_until_release           = false;
 };
 
 }  // namespace codex_micro_app::view

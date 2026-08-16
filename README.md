@@ -3,8 +3,8 @@
 [简体中文](README.zh-CN.md)
 
 This branch adds a Codex Micro-compatible control surface as a normal App in
-M5Stack's factory-style StopWatch launcher. The other factory Apps remain
-available, and the Codex screen can return to that launcher locally.
+M5Stack's factory-style StopWatch launcher. The same App now contains parallel
+Codex and Chat dashboards, while the other factory Apps remain available.
 
 > [!WARNING]
 > This is an experimental, unofficial compatibility layer for the **M5Stack
@@ -13,10 +13,10 @@ available, and the Codex screen can return to that launcher locally.
 > A successful build is not evidence that Bluetooth, input, power, or recovery
 > has been validated on physical hardware.
 
-This revision has been validated on one physical C152 for cold boot, the
-factory-style launcher, the Codex Micro UI and controls, BLE connectivity, the
-center Send action, and the local A+B return to the launcher. Future ChatGPT
-Desktop or protocol changes may still affect compatibility.
+The Codex-only baseline was validated on one physical C152 for cold boot, the
+factory-style launcher, Codex Micro controls, BLE connectivity, center Send,
+and local A+B Home. The new dual-dashboard revision has only passed host unit
+tests and a complete firmware build; it has not been flashed to hardware.
 
 ## Controls
 
@@ -25,11 +25,12 @@ Recommended mappings are shown below.
 
 | StopWatch input | Reported control | Behavior / recommended host assignment |
 | --- | --- | --- |
-| Hold physical **A** | `ACT10` | Push to talk; release stops it |
+| Double-tap physical **A** | Local mode action | Toggle between the Codex and Chat dashboards without adding an on-screen button |
+| Hold physical **A** | `ACT10` | Push to talk after a roughly 180 ms gesture-arbitration delay; release stops it |
 | Press and release physical **B** | `ACT09` | Short command pulse; Voice Chat is a suggested assignment |
 | Tap **A1** through **A6** | `AG00` through `AG05` | Open or focus the six host-assigned Agent conversations |
-| Tap the center quota / **SEND** control | `ACT12` | Send the current composer message |
-| Swipe up, right, down, or left | Analog direction | Four independently host-configurable actions |
+| Tap the center quota / **SEND** control in Codex mode | `ACT12` | Send the current composer message; Chat mode keeps this local until host targeting exists |
+| Swipe up, right, down, or left in Codex mode | Analog direction | Four independently host-configurable actions; swipes are intentionally ignored in Chat mode |
 | Hold physical **A+B** together for about 500 ms | Local launcher action | Release controls and close only this App, returning to the factory launcher |
 
 In ChatGPT Desktop, select **Settings > Codex Micro > Agent keys > Custom
@@ -40,6 +41,31 @@ The A+B action is handled on the StopWatch. It does not send a Back command to
 ChatGPT and does not quit ChatGPT on the Mac. The BLE service is process-scoped,
 so leaving the Codex App keeps the paired control surface available in the
 background while the factory launcher or another StopWatch App is visible.
+
+### Chat dashboard milestone
+
+Chat mode reuses the same six circular positions and center Send control as
+Codex mode, with a violet accent and short aliases. Its model supports one
+cross-project global recent list plus pinned slots; pinned positions remain
+stable for the active session. A slot tap currently selects and previews that
+chat locally and deliberately does **not** emit `AG00`-`AG05`, which would open
+an Agent by mistake. The center is marked `LOCAL PREVIEW` and suppresses
+`ACT12` in Chat mode until the selected target can be acknowledged by the host,
+preventing a message from being sent into the wrong composer.
+
+This milestone does not yet open a ChatGPT consumer chat on the Mac. The
+current host protocol supplies six Agent states but no public chat catalog or
+stable chat target identifier, so host navigation requires a separately
+reviewed bridge before it can be wired safely.
+
+The committed build uses neutral sample metadata. To test private aliases,
+copy `main/apps/app_codex_micro/model/local_chat_slots.h.example` to
+`local_chat_slots.h`, edit the compile-time entries, and rebuild. The private
+header is git-ignored. Store only short aliases/project/title metadata there;
+never put chat URLs, conversation IDs, cookies, or credentials in firmware.
+Labels are intentionally limited to short printable ASCII strings. Git-ignore
+prevents an accidental source commit, but the chosen metadata is still compiled
+into the firmware image and is not encrypted at rest.
 
 ## Bluetooth pairing
 
@@ -91,8 +117,10 @@ M5Stack's general StopWatch operating guide is available in the
 
 ## Architecture
 
-- The Codex UI is a standard Mooncake `AppAbility` registered beside the
-  factory Apps.
+- The Codex/Chat UI remains one standard Mooncake `AppAbility` registered
+  beside the factory Apps; switching dashboards does not create another App.
+- Pure C++ models arbitrate A-button double-tap versus PTT hold and compose the
+  six Chat slots, allowing host-side regression tests without LVGL or hardware.
 - A native ESP-IDF Bluedroid service owns BLE outside the UI lifecycle.
 - LVGL callbacks enqueue touch intents; the App loop sends BLE controls and
   pairs every press with a release.
