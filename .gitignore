@@ -63,3 +63,6 @@ obj/
 
 sdkconfig
 sdkconfig.old
+
+# Local Chat-mode aliases may contain private project or conversation names.
+main/apps/app_codex_micro/model/local_chat_slots.h

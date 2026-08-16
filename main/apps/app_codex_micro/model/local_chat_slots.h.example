@@ -1,0 +1,25 @@
+/*
+ * Copy this file to local_chat_slots.h and replace the local display metadata.
+ * The copied file is ignored by Git. Use opaque local IDs; never put ChatGPT
+ * URLs, conversation IDs, cookies, or credentials here.
+ */
+#pragma once
+
+#include "chat_mode_model.h"
+
+namespace codex_micro_app::model::config {
+
+inline constexpr ChatSlots kPinnedSlots = {
+    ChatSlot{ChatEntry{"fixed-1", "FIXED", "PROJECT", "Pinned chat"}, true, true},
+};
+
+inline constexpr std::array<ChatEntry, 6> kRecentChats = {
+    ChatEntry{"recent-1", "CHAT 1", "PROJECT", "Recent chat one"},
+    ChatEntry{"recent-2", "CHAT 2", "PROJECT", "Recent chat two"},
+    ChatEntry{"recent-3", "CHAT 3", "PROJECT", "Recent chat three"},
+    ChatEntry{"recent-4", "CHAT 4", "PROJECT", "Recent chat four"},
+    ChatEntry{"recent-5", "CHAT 5", "PROJECT", "Recent chat five"},
+    ChatEntry{"recent-6", "CHAT 6", "PROJECT", "Recent chat six"},
+};
+
+}  // namespace codex_micro_app::model::config
