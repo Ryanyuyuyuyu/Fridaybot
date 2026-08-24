@@ -22,15 +22,39 @@
     </g>
 
     <circle cx="233" cy="237" r="104" fill="#000000"/>
-    <g fill="none" stroke-width="7">
-      <circle cx="233" cy="237" r="96.5" stroke="#26323d"/>
-      <circle cx="233" cy="237" r="84.5" stroke="#26323d"/>
-      <circle cx="233" cy="237" r="96.5" stroke="#6e9cc6" stroke-linecap="round"
-              stroke-dasharray="412.3 606.3" transform="rotate(-90 233 237)"/>
-      <circle cx="233" cy="237" r="84.5" stroke="#12d6b2" stroke-linecap="round"
-              stroke-dasharray="217.7 530.9" transform="rotate(-90 233 237)"/>
+    <circle cx="233" cy="237" r="87.5" fill="#070b0e"/>
+    <g fill="none" stroke-width="9">
+      <circle cx="233" cy="237" r="95.5" stroke="#202b33"/>
+      <circle cx="233" cy="237" r="86.5" stroke="#182229"/>
+      <circle cx="233" cy="237" r="95.5" pathLength="100" stroke="#aab7c0"
+              stroke-dasharray="68 100" transform="rotate(-90 233 237)"/>
+      <circle cx="233" cy="237" r="86.5" pathLength="100" stroke="#65c7a9"
+              stroke-dasharray="41 100" transform="rotate(-90 233 237)"/>
     </g>
-    <text x="233" y="238" fill="#12d6b2" font-size="22" font-weight="600"
-          dominant-baseline="middle">SEND</text>
+    <g fill="none" stroke-width="3" stroke-linecap="round">
+      <circle cx="233" cy="237" r="95.5" pathLength="100" stroke="#e0e7eb"
+              stroke-dasharray="5 95" stroke-dashoffset="-63" transform="rotate(-90 233 237)"/>
+      <circle cx="233" cy="237" r="86.5" pathLength="100" stroke="#9de1cc"
+              stroke-dasharray="5 95" stroke-dashoffset="-36" transform="rotate(-90 233 237)"/>
+    </g>
+    <circle cx="146.6" cy="277.7" r="3" fill="#f5f8f9"/>
+    <circle cx="279.3" cy="310" r="3" fill="#f5f8f9"/>
+
+    <text x="201" y="211" fill="#65c7a9" font-size="10" font-weight="600" letter-spacing="1">5H</text>
+    <text x="263" y="211" fill="#aab7c0" font-size="10" font-weight="600" letter-spacing="1">WK</text>
+    <line x1="233" y1="208" x2="233" y2="244" stroke="#34414a" stroke-width="1"/>
+    <text x="198" y="241" fill="#edf2f4" font-size="26" font-weight="600">41</text>
+    <text x="260" y="241" fill="#edf2f4" font-size="26" font-weight="600">68</text>
+    <text x="218" y="228" fill="#65c7a9" font-size="10" text-anchor="start">%</text>
+    <text x="280" y="228" fill="#aab7c0" font-size="10" text-anchor="start">%</text>
+
+    <g stroke-linecap="round">
+      <line x1="177" y1="261" x2="194" y2="261" stroke="#4c5b65" stroke-width="1"/>
+      <line x1="272" y1="261" x2="289" y2="261" stroke="#4c5b65" stroke-width="1"/>
+      <circle cx="201" cy="261" r="1.5" fill="#65c7a9"/>
+      <circle cx="265" cy="261" r="1.5" fill="#65c7a9"/>
+      <line x1="226" y1="277" x2="240" y2="277" stroke="#65c7a9" stroke-width="2"/>
+    </g>
+    <text x="235" y="266" fill="#edf2f4" font-size="16" font-weight="600" letter-spacing="4">SEND</text>
   </g>
 </svg>

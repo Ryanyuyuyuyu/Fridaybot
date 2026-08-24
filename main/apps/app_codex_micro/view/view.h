@@ -72,32 +72,67 @@ public:
     void update(const DashboardModel& model);
 
 private:
+    struct LimitIndicator {
+        lv_obj_t* arc           = nullptr;
+        lv_obj_t* highlight     = nullptr;
+        lv_obj_t* head          = nullptr;
+        lv_obj_t* nameLabel     = nullptr;
+        lv_obj_t* valueLabel    = nullptr;
+        lv_obj_t* percentLabel  = nullptr;
+        int32_t displayedValue  = 0;
+        int32_t targetValue     = -1;
+        int32_t displayedWhole  = -1;
+        int32_t headRadius      = 0;
+        uint32_t color          = 0;
+        uint32_t highlightColor = 0;
+        bool available          = false;
+        bool animating          = false;
+    };
+
     struct TouchBinding {
         DashboardView* owner = nullptr;
         int8_t agent         = -1;
         bool isSend          = false;
     };
 
+    static void applyLimitAnimationValue(void* context, int32_t value);
+    static void handleLimitAnimationCompleted(lv_anim_t* animation);
+    static void applySendPulseAnimationValue(void* context, int32_t value);
     static void handleTouchEvent(lv_event_t* event);
     static void handleCircleHitTest(lv_event_t* event);
     static void handleGestureEvent(lv_event_t* event);
+    void updateLimitIndicator(LimitIndicator& indicator, float usedPercent, bool available, uint32_t durationMs,
+                              uint32_t delayMs);
+    void setLimitIndicatorVisible(LimitIndicator& indicator, bool visible);
+    void setCodexInstrumentVisible(bool visible);
+    void playSendPulse();
+    void restoreSendPulseVisuals();
     void enqueueIntent(const TouchIntent& intent);
 
-    lv_obj_t* _root                             = nullptr;
-    lv_obj_t* _connection_label                 = nullptr;
-    lv_obj_t* _battery_label                    = nullptr;
-    lv_obj_t* _quota_button                     = nullptr;
-    lv_obj_t* _quota_label                      = nullptr;
-    lv_obj_t* _reset_label                      = nullptr;
-    lv_obj_t* _weekly_limit_arc                 = nullptr;
-    lv_obj_t* _five_hour_limit_arc              = nullptr;
-    lv_obj_t* _send_label                       = nullptr;
-    lv_obj_t* _home_hint_label                  = nullptr;
+    lv_obj_t* _root             = nullptr;
+    lv_obj_t* _connection_label = nullptr;
+    lv_obj_t* _battery_label    = nullptr;
+    lv_obj_t* _quota_button     = nullptr;
+    lv_obj_t* _quota_label      = nullptr;
+    lv_obj_t* _reset_label      = nullptr;
+    lv_obj_t* _center_surface   = nullptr;
+    lv_obj_t* _metric_divider   = nullptr;
+    lv_obj_t* _send_ripple      = nullptr;
+    lv_obj_t* _send_left_line   = nullptr;
+    lv_obj_t* _send_right_line  = nullptr;
+    lv_obj_t* _send_left_dot    = nullptr;
+    lv_obj_t* _send_right_dot   = nullptr;
+    lv_obj_t* _send_mark        = nullptr;
+    lv_obj_t* _send_label       = nullptr;
+    lv_obj_t* _home_hint_label  = nullptr;
+    LimitIndicator _weekly_limit;
+    LimitIndicator _five_hour_limit;
     std::array<lv_obj_t*, 6> _agent_buttons     = {};
     std::array<lv_obj_t*, 6> _agent_labels      = {};
     std::array<TouchBinding, 7> _touch_bindings = {};
     QueueHandle_t _intent_queue                 = nullptr;
     bool _discard_touch_until_release           = false;
+    bool _codex_mode_active                     = false;
 };
 
 }  // namespace codex_micro_app::view
