@@ -23,18 +23,18 @@ struct Quota {
     bool available          = false;
 };
 
-struct TokenUsage {
-    uint64_t weeklyTokens   = 0;
-    uint64_t lifetimeTokens = 0;
-    uint32_t receivedAtMs   = 0;
-    bool weeklyAvailable    = false;
-    bool lifetimeAvailable  = false;
+struct RateLimitUsage {
+    float fiveHourUsedPercent = 0.0f;
+    float weeklyUsedPercent   = 0.0f;
+    uint32_t receivedAtMs     = 0;
+    bool fiveHourAvailable    = false;
+    bool weeklyAvailable      = false;
 };
 
 struct State {
     std::array<Thread, 6> threads{};
     Quota quota{};
-    TokenUsage usage{};
+    RateLimitUsage rateLimits{};
     bool connected           = false;
     bool hostRpcObserved     = false;
     uint32_t lastHostRpcAtMs = 0;

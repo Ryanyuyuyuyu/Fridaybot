@@ -21,16 +21,16 @@
       <text x="91" y="318">A5</text><text x="91" y="154">A6</text>
     </g>
 
-    <circle cx="233" cy="237" r="99" fill="#000000" stroke="#26323d" stroke-width="10"/>
-    <circle cx="190" cy="213" r="34.5" fill="none" stroke="#12d6b2" stroke-width="3"/>
-    <circle cx="276" cy="213" r="34.5" fill="none" stroke="#6e9cc6" stroke-width="3"/>
-    <g dominant-baseline="middle">
-      <text x="190" y="199" fill="#7d8a98" font-size="10">7D</text>
-      <text x="190" y="223" fill="#e8eef5" font-size="18">12.4M</text>
-      <text x="276" y="199" fill="#7d8a98" font-size="10">ALL</text>
-      <text x="276" y="223" fill="#e8eef5" font-size="18">83.7M</text>
-      <text x="233" y="280" fill="#12d6b2" font-size="22" font-weight="600">SEND</text>
-      <text x="233" y="315" fill="#626c7c" font-size="10">HOLD A+B FOR HOME</text>
+    <circle cx="233" cy="237" r="104" fill="#000000"/>
+    <g fill="none" stroke-width="7">
+      <circle cx="233" cy="237" r="96.5" stroke="#26323d"/>
+      <circle cx="233" cy="237" r="84.5" stroke="#26323d"/>
+      <circle cx="233" cy="237" r="96.5" stroke="#6e9cc6" stroke-linecap="round"
+              stroke-dasharray="412.3 606.3" transform="rotate(-90 233 237)"/>
+      <circle cx="233" cy="237" r="84.5" stroke="#12d6b2" stroke-linecap="round"
+              stroke-dasharray="217.7 530.9" transform="rotate(-90 233 237)"/>
     </g>
+    <text x="233" y="238" fill="#12d6b2" font-size="22" font-weight="600"
+          dominant-baseline="middle">SEND</text>
   </g>
 </svg>

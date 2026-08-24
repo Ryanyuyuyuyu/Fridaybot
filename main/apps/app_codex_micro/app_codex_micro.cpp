@@ -35,52 +35,6 @@ bool deadlineReached(uint32_t now, uint32_t deadline)
     return static_cast<int32_t>(now - deadline) >= 0;
 }
 
-std::string formatResetTime(uint32_t seconds)
-{
-    char text[24] = {};
-    if (seconds < 60) {
-        std::snprintf(text, sizeof(text), "RESET <1M");
-    } else if (seconds < 3600) {
-        std::snprintf(text, sizeof(text), "RESET %luM", static_cast<unsigned long>(seconds / 60));
-    } else if (seconds < 86400) {
-        std::snprintf(text, sizeof(text), "RESET %luH %luM", static_cast<unsigned long>(seconds / 3600),
-                      static_cast<unsigned long>((seconds % 3600) / 60));
-    } else {
-        std::snprintf(text, sizeof(text), "RESET %luD %luH", static_cast<unsigned long>(seconds / 86400),
-                      static_cast<unsigned long>((seconds % 86400) / 3600));
-    }
-    return text;
-}
-
-std::string formatTokenCount(uint64_t tokens)
-{
-    if (tokens < 1000) {
-        return std::to_string(tokens);
-    }
-
-    double divisor     = 1000.0;
-    const char* suffix = "K";
-    if (tokens >= 1000000000000ULL) {
-        divisor = 1000000000000.0;
-        suffix  = "T";
-    } else if (tokens >= 1000000000ULL) {
-        divisor = 1000000000.0;
-        suffix  = "B";
-    } else if (tokens >= 1000000ULL) {
-        divisor = 1000000.0;
-        suffix  = "M";
-    }
-
-    const double scaled = static_cast<double>(tokens) / divisor;
-    char text[16]       = {};
-    if (scaled < 100.0) {
-        std::snprintf(text, sizeof(text), "%.1f%s", scaled, suffix);
-    } else {
-        std::snprintf(text, sizeof(text), "%.0f%s", scaled, suffix);
-    }
-    return text;
-}
-
 }  // namespace
 
 AppCodexMicro::AppCodexMicro()
@@ -477,22 +431,12 @@ void AppCodexMicro::updateView(uint32_t now, bool force)
         }
     }
 
-    model.quotaAvailable = state.quota.available;
-    if (state.quota.available) {
-        const int percent      = static_cast<int>(std::lround(std::clamp(state.quota.remainingPercent, 0.0f, 100.0f)));
-        model.quotaText        = std::to_string(percent) + "%";
-        const uint32_t elapsed = (now - state.quota.receivedAtMs) / 1000;
-        const uint32_t remaining = elapsed >= state.quota.resetInSeconds ? 0 : state.quota.resetInSeconds - elapsed;
-        model.resetText          = formatResetTime(remaining);
-    } else {
-        model.quotaText = "--";
-        model.resetText = "QUOTA WAITING";
-    }
-
-    model.weeklyUsageAvailable   = state.usage.weeklyAvailable;
-    model.lifetimeUsageAvailable = state.usage.lifetimeAvailable;
-    model.weeklyUsageText        = state.usage.weeklyAvailable ? formatTokenCount(state.usage.weeklyTokens) : "--";
-    model.lifetimeUsageText      = state.usage.lifetimeAvailable ? formatTokenCount(state.usage.lifetimeTokens) : "--";
+    // Missing schema-v3 windows remain visually unknown. The legacy quota
+    // snapshot is retained for protocol compatibility but is never relabelled.
+    model.fiveHourLimitAvailable = state.rateLimits.fiveHourAvailable;
+    model.weeklyLimitAvailable   = state.rateLimits.weeklyAvailable;
+    model.fiveHourUsedPercent    = state.rateLimits.fiveHourUsedPercent;
+    model.weeklyUsedPercent      = state.rateLimits.weeklyUsedPercent;
 
     {
         LvglLockGuard lock;
