@@ -1499,14 +1499,32 @@ void Service::Impl::handleQuotaWrite(const WriteEvent& write)
         return;
     }
 
+    const JsonVariantConst weeklyTokens   = object["weekly_tokens"];
+    const JsonVariantConst lifetimeTokens = object["lifetime_tokens"];
+    const bool weeklyAvailable            = weeklyTokens.is<uint64_t>();
+    const bool lifetimeAvailable          = lifetimeTokens.is<uint64_t>();
+    if ((!weeklyTokens.isNull() && !weeklyAvailable) || (!lifetimeTokens.isNull() && !lifetimeAvailable)) {
+        ESP_LOGW(kTag, "quota update contains invalid token usage fields");
+    }
+
+    const uint32_t receivedAt = nowMs();
+
     xSemaphoreTake(stateMutex, portMAX_DELAY);
-    state.quota.remainingPercent = percentage;
-    state.quota.resetInSeconds   = reset.as<uint32_t>();
-    state.quota.receivedAtMs     = nowMs();
-    state.quota.available        = true;
+    state.quota.remainingPercent  = percentage;
+    state.quota.resetInSeconds    = reset.as<uint32_t>();
+    state.quota.receivedAtMs      = receivedAt;
+    state.quota.available         = true;
+    state.usage.weeklyTokens      = weeklyAvailable ? weeklyTokens.as<uint64_t>() : 0;
+    state.usage.lifetimeTokens    = lifetimeAvailable ? lifetimeTokens.as<uint64_t>() : 0;
+    state.usage.receivedAtMs      = receivedAt;
+    state.usage.weeklyAvailable   = weeklyAvailable;
+    state.usage.lifetimeAvailable = lifetimeAvailable;
     ++state.revision;
     xSemaphoreGive(stateMutex);
     ESP_LOGI(kTag, "quota remaining=%.1f reset=%lus", percentage, static_cast<unsigned long>(reset.as<uint32_t>()));
+    if (weeklyAvailable || lifetimeAvailable) {
+        ESP_LOGI(kTag, "token usage fields weekly=%d lifetime=%d", weeklyAvailable, lifetimeAvailable);
+    }
 }
 
 void Service::Impl::processCommand(const Command& command)

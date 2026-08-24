@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="466" height="466" viewBox="0 0 466 466">
+  <defs>
+    <clipPath id="dial"><circle cx="233" cy="233" r="233"/></clipPath>
+  </defs>
+  <g clip-path="url(#dial)" font-family="Montserrat, Arial, sans-serif" text-anchor="middle">
+    <rect width="466" height="466" fill="#000000"/>
+    <text x="18" y="25" fill="#77e6a5" font-size="16" text-anchor="start">CODEX LIVE</text>
+    <text x="448" y="25" fill="#7d8a98" font-size="16" text-anchor="end">BAT 83%</text>
+
+    <g fill="#111820" stroke="#26323d" stroke-width="4">
+      <circle cx="233" cy="72" r="54"/>
+      <circle cx="375" cy="154" r="54"/>
+      <circle cx="375" cy="318" r="54"/>
+      <circle cx="233" cy="400" r="54"/>
+      <circle cx="91" cy="318" r="54"/>
+      <circle cx="91" cy="154" r="54"/>
+    </g>
+    <g fill="#7d8a98" font-size="22" dominant-baseline="middle">
+      <text x="233" y="72">A1</text><text x="375" y="154">A2</text>
+      <text x="375" y="318">A3</text><text x="233" y="400">A4</text>
+      <text x="91" y="318">A5</text><text x="91" y="154">A6</text>
+    </g>
+
+    <circle cx="233" cy="237" r="99" fill="#000000" stroke="#26323d" stroke-width="10"/>
+    <circle cx="190" cy="213" r="34.5" fill="none" stroke="#12d6b2" stroke-width="3"/>
+    <circle cx="276" cy="213" r="34.5" fill="none" stroke="#6e9cc6" stroke-width="3"/>
+    <g dominant-baseline="middle">
+      <text x="190" y="199" fill="#7d8a98" font-size="10">7D</text>
+      <text x="190" y="223" fill="#e8eef5" font-size="18">12.4M</text>
+      <text x="276" y="199" fill="#7d8a98" font-size="10">ALL</text>
+      <text x="276" y="223" fill="#e8eef5" font-size="18">83.7M</text>
+      <text x="233" y="280" fill="#12d6b2" font-size="22" font-weight="600">SEND</text>
+      <text x="233" y="315" fill="#626c7c" font-size="10">HOLD A+B FOR HOME</text>
+    </g>
+  </g>
+</svg>

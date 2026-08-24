@@ -21,6 +21,7 @@ constexpr uint32_t kPrimaryText     = 0xE8EEF5;
 constexpr uint32_t kSecondaryText   = 0x7D8A98;
 constexpr uint32_t kTrackColor      = 0x26323D;
 constexpr uint32_t kAccentColor     = 0x12D6B2;
+constexpr uint32_t kLifetimeColor   = 0x6E9CC6;
 constexpr uint32_t kChatAccentColor = 0xA78BFA;
 constexpr uint32_t kChatPanelColor  = 0x211B35;
 constexpr uint32_t kChatMutedText   = 0xB9A9E8;
@@ -124,6 +125,31 @@ void makeTransparentLabel(lv_obj_t* label, const lv_font_t* font, uint32_t color
     lv_obj_set_style_bg_opa(label, LV_OPA_TRANSP, LV_PART_MAIN);
 }
 
+lv_obj_t* makeUsageBadge(lv_obj_t* parent, int32_t x, uint32_t color)
+{
+    auto* badge = lv_obj_create(parent);
+    lv_obj_remove_style_all(badge);
+    lv_obj_set_size(badge, 72, 72);
+    lv_obj_align(badge, LV_ALIGN_CENTER, x, -24);
+    lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(badge, 3, LV_PART_MAIN);
+    lv_obj_set_style_border_color(badge, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+    return badge;
+}
+
+void setUsageBadgeVisible(lv_obj_t* badge, bool visible)
+{
+    if (visible) {
+        lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 }  // namespace
 
 DashboardView::~DashboardView()
@@ -198,10 +224,30 @@ bool DashboardView::init(lv_obj_t* parent)
     lv_label_set_text(_reset_label, "QUOTA WAITING");
     lv_obj_align(_reset_label, LV_ALIGN_CENTER, 0, 9);
 
+    _weekly_usage_badge   = makeUsageBadge(_quota_button, -43, kAccentColor);
+    _weekly_usage_caption = lv_label_create(_weekly_usage_badge);
+    makeTransparentLabel(_weekly_usage_caption, &lv_font_montserrat_10, kSecondaryText);
+    lv_label_set_text(_weekly_usage_caption, "7D");
+    lv_obj_align(_weekly_usage_caption, LV_ALIGN_CENTER, 0, -13);
+    _weekly_usage_value = lv_label_create(_weekly_usage_badge);
+    makeTransparentLabel(_weekly_usage_value, &lv_font_montserrat_18, kPrimaryText);
+    lv_label_set_text(_weekly_usage_value, "--");
+    lv_obj_align(_weekly_usage_value, LV_ALIGN_CENTER, 0, 10);
+
+    _lifetime_usage_badge   = makeUsageBadge(_quota_button, 43, kLifetimeColor);
+    _lifetime_usage_caption = lv_label_create(_lifetime_usage_badge);
+    makeTransparentLabel(_lifetime_usage_caption, &lv_font_montserrat_10, kSecondaryText);
+    lv_label_set_text(_lifetime_usage_caption, "ALL");
+    lv_obj_align(_lifetime_usage_caption, LV_ALIGN_CENTER, 0, -13);
+    _lifetime_usage_value = lv_label_create(_lifetime_usage_badge);
+    makeTransparentLabel(_lifetime_usage_value, &lv_font_montserrat_18, kPrimaryText);
+    lv_label_set_text(_lifetime_usage_value, "--");
+    lv_obj_align(_lifetime_usage_value, LV_ALIGN_CENTER, 0, 10);
+
     _send_label = lv_label_create(_quota_button);
-    makeTransparentLabel(_send_label, &lv_font_montserrat_18, kAccentColor);
-    lv_label_set_text(_send_label, "TAP TO SEND");
-    lv_obj_align(_send_label, LV_ALIGN_CENTER, 0, 49);
+    makeTransparentLabel(_send_label, &lv_font_montserrat_22, kAccentColor);
+    lv_label_set_text(_send_label, "SEND");
+    lv_obj_align(_send_label, LV_ALIGN_CENTER, 0, 43);
 
     _home_hint_label = lv_label_create(_quota_button);
     makeTransparentLabel(_home_hint_label, &lv_font_montserrat_10, 0x626C7C);
@@ -282,6 +328,10 @@ void DashboardView::update(const DashboardModel& model)
     lv_obj_set_style_text_color(_connection_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
     lv_label_set_text(_battery_label, model.batteryText.c_str());
     if (model.mode == codex_micro_app::model::DashboardMode::Chat) {
+        setUsageBadgeVisible(_weekly_usage_badge, false);
+        setUsageBadgeVisible(_lifetime_usage_badge, false);
+        lv_obj_clear_flag(_quota_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(_reset_label, LV_OBJ_FLAG_HIDDEN);
         const ChatSlotVisual* selected = nullptr;
         for (const auto& chat : model.chats) {
             if (chat.available && chat.selected) {
@@ -293,16 +343,45 @@ void DashboardView::update(const DashboardModel& model)
         lv_label_set_text(_quota_label, selected != nullptr ? selected->title.c_str() : "NO CHATS");
         lv_label_set_text(_reset_label, selected != nullptr ? selected->project.c_str() : "ADD LOCAL SLOTS");
         lv_label_set_text(_send_label, "LOCAL PREVIEW");
+        lv_obj_set_style_text_font(_send_label, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_align(_send_label, LV_ALIGN_CENTER, 0, 49);
         lv_obj_set_style_text_color(_send_label, lv_color_hex(kChatAccentColor), LV_PART_MAIN);
         lv_obj_set_style_border_color(_quota_button, lv_color_hex(selected != nullptr ? kChatAccentColor : kTrackColor),
                                       LV_PART_MAIN);
     } else {
-        lv_obj_set_style_text_font(_quota_label, &lv_font_montserrat_36, LV_PART_MAIN);
-        lv_label_set_text(_quota_label, model.quotaText.c_str());
-        lv_label_set_text(_reset_label, model.resetText.c_str());
-        lv_label_set_text(_send_label, "TAP TO SEND");
+        const bool show_usage = model.weeklyUsageAvailable || model.lifetimeUsageAvailable;
+        setUsageBadgeVisible(_weekly_usage_badge, show_usage);
+        setUsageBadgeVisible(_lifetime_usage_badge, show_usage);
+        if (show_usage) {
+            lv_obj_add_flag(_quota_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(_reset_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(_quota_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(_reset_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_text_font(_quota_label, &lv_font_montserrat_36, LV_PART_MAIN);
+            lv_label_set_text(_quota_label, model.quotaText.c_str());
+            lv_label_set_text(_reset_label, model.resetText.c_str());
+        }
+        lv_label_set_text(_weekly_usage_value, model.weeklyUsageText.c_str());
+        lv_label_set_text(_lifetime_usage_value, model.lifetimeUsageText.c_str());
+        lv_obj_set_style_border_color(
+            _weekly_usage_badge, lv_color_hex(model.weeklyUsageAvailable ? kAccentColor : kTrackColor), LV_PART_MAIN);
+        lv_obj_set_style_border_color(_lifetime_usage_badge,
+                                      lv_color_hex(model.lifetimeUsageAvailable ? kLifetimeColor : kTrackColor),
+                                      LV_PART_MAIN);
+        lv_obj_set_style_text_color(_weekly_usage_value,
+                                    lv_color_hex(model.weeklyUsageAvailable ? kPrimaryText : kSecondaryText),
+                                    LV_PART_MAIN);
+        lv_obj_set_style_text_color(_lifetime_usage_value,
+                                    lv_color_hex(model.lifetimeUsageAvailable ? kPrimaryText : kSecondaryText),
+                                    LV_PART_MAIN);
+        lv_obj_set_style_text_font(_send_label, show_usage ? &lv_font_montserrat_22 : &lv_font_montserrat_18,
+                                   LV_PART_MAIN);
+        lv_label_set_text(_send_label, show_usage ? "SEND" : "TAP TO SEND");
+        lv_obj_align(_send_label, LV_ALIGN_CENTER, 0, show_usage ? 43 : 49);
         lv_obj_set_style_text_color(_send_label, lv_color_hex(kAccentColor), LV_PART_MAIN);
-        lv_obj_set_style_border_color(_quota_button, lv_color_hex(model.quotaAvailable ? kAccentColor : kTrackColor),
+        lv_obj_set_style_border_color(_quota_button,
+                                      lv_color_hex(!show_usage && model.quotaAvailable ? kAccentColor : kTrackColor),
                                       LV_PART_MAIN);
     }
 

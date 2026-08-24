@@ -55,6 +55,10 @@ struct DashboardModel {
     std::string quotaText;
     std::string resetText;
     bool quotaAvailable = false;
+    std::string weeklyUsageText;
+    std::string lifetimeUsageText;
+    bool weeklyUsageAvailable   = false;
+    bool lifetimeUsageAvailable = false;
 };
 
 class DashboardView {
@@ -88,6 +92,12 @@ private:
     lv_obj_t* _quota_button                     = nullptr;
     lv_obj_t* _quota_label                      = nullptr;
     lv_obj_t* _reset_label                      = nullptr;
+    lv_obj_t* _weekly_usage_badge               = nullptr;
+    lv_obj_t* _weekly_usage_caption             = nullptr;
+    lv_obj_t* _weekly_usage_value               = nullptr;
+    lv_obj_t* _lifetime_usage_badge             = nullptr;
+    lv_obj_t* _lifetime_usage_caption           = nullptr;
+    lv_obj_t* _lifetime_usage_value             = nullptr;
     lv_obj_t* _send_label                       = nullptr;
     lv_obj_t* _home_hint_label                  = nullptr;
     std::array<lv_obj_t*, 6> _agent_buttons     = {};

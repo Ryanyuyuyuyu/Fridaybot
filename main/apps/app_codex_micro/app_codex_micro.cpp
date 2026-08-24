@@ -52,6 +52,35 @@ std::string formatResetTime(uint32_t seconds)
     return text;
 }
 
+std::string formatTokenCount(uint64_t tokens)
+{
+    if (tokens < 1000) {
+        return std::to_string(tokens);
+    }
+
+    double divisor     = 1000.0;
+    const char* suffix = "K";
+    if (tokens >= 1000000000000ULL) {
+        divisor = 1000000000000.0;
+        suffix  = "T";
+    } else if (tokens >= 1000000000ULL) {
+        divisor = 1000000000.0;
+        suffix  = "B";
+    } else if (tokens >= 1000000ULL) {
+        divisor = 1000000.0;
+        suffix  = "M";
+    }
+
+    const double scaled = static_cast<double>(tokens) / divisor;
+    char text[16]       = {};
+    if (scaled < 100.0) {
+        std::snprintf(text, sizeof(text), "%.1f%s", scaled, suffix);
+    } else {
+        std::snprintf(text, sizeof(text), "%.0f%s", scaled, suffix);
+    }
+    return text;
+}
+
 }  // namespace
 
 AppCodexMicro::AppCodexMicro()
@@ -459,6 +488,11 @@ void AppCodexMicro::updateView(uint32_t now, bool force)
         model.quotaText = "--";
         model.resetText = "QUOTA WAITING";
     }
+
+    model.weeklyUsageAvailable   = state.usage.weeklyAvailable;
+    model.lifetimeUsageAvailable = state.usage.lifetimeAvailable;
+    model.weeklyUsageText        = state.usage.weeklyAvailable ? formatTokenCount(state.usage.weeklyTokens) : "--";
+    model.lifetimeUsageText      = state.usage.lifetimeAvailable ? formatTokenCount(state.usage.lifetimeTokens) : "--";
 
     {
         LvglLockGuard lock;
