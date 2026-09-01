@@ -40,8 +40,8 @@ public:
     bool sendTransfer(const presence::Transfer& transfer);
     void setTravelActive(bool active);
 
-    // Called only by the NimBLE callbacks. These functions deliberately do no
-    // rendering, allocation or emotion inference.
+    // Called only by the shared Bluedroid worker. These functions deliberately
+    // do no rendering, allocation or emotion inference.
     bool acceptPacket(const uint8_t* bytes, size_t length, uint32_t nowMs);
     bool acceptTransferPacket(const uint8_t* bytes, size_t length, uint32_t nowMs);
     void setConnected(bool connected, uint16_t connectionHandle = UINT16_MAX);

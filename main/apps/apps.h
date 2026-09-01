@@ -6,6 +6,7 @@
 #pragma once
 #include "app_friday/app_friday.h"
 #include "app_template/app_template.h"
+#include "app_codex_micro/app_codex_micro.h"
 #include "app_launcher/app_launcher.h"
 #include "app_watch_face/app_watch_face.h"
 #include "app_stopwatch/app_stopwatch.h"

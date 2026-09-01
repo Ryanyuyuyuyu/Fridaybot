@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 22efbcf..8fe7794 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,7 +1,7 @@
+ set(COMPONENT_ADD_INCLUDEDIRS
+     src
+     )
+-file(GLOB SRCS
++file(GLOB SRCS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+      src/*.cpp
+      src/lgfx/Fonts/efont/*.c
+      src/lgfx/Fonts/IPA/*.c

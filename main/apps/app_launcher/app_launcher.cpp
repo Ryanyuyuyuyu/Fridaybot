@@ -23,13 +23,6 @@ void AppLauncher::onLauncherOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
-    if (_should_open_friday && open_friday_on_boot()) {
-        _should_open_friday   = false;
-        _should_play_boot_sfx = false;
-        _is_first_open        = false;
-        return;
-    }
-
     show_guide_page();
 
     {
@@ -143,17 +136,4 @@ void AppLauncher::show_guide_page()
 
     LvglLockGuard lock;
     guide_page.reset();
-}
-
-bool AppLauncher::open_friday_on_boot()
-{
-    for (const auto& props : getAppProps()) {
-        if (props.info.name == "Friday") {
-            mclog::tagInfo(getAppInfo().name, "opening Friday on boot, app id: {}", props.appID);
-            return openApp(props.appID);
-        }
-    }
-
-    mclog::tagError(getAppInfo().name, "Friday app is not installed");
-    return false;
 }
