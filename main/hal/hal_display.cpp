@@ -269,12 +269,19 @@ Hal::TouchPoint Hal::getTouchPoint()
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
 
-#define LV_BUFFER_LINE 120
+// One eye transition can invalidate roughly 170 vertical pixels. A buffer
+// large enough for that region avoids splitting every expressive frame into
+// several render/flush passes. PSRAM cost is about 329 KiB for both RGB565
+// buffers on the 468-pixel-wide display.
+static constexpr uint32_t LV_BUFFER_LINES        = 180;
+static constexpr size_t LV_BUFFER_BYTES_PER_LINE = 468 * sizeof(lv_color_t);
+static constexpr size_t LV_BUFFER_BYTES          = LV_BUFFER_LINES * LV_BUFFER_BYTES_PER_LINE;
+static constexpr uint32_t LVGL_TASK_PERIOD_MS = 5;
 
 static void lvgl_tick_timer(void *arg)
 {
     (void)arg;
-    lv_tick_inc(10);
+    lv_tick_inc(LVGL_TASK_PERIOD_MS);
 }
 
 static void lvgl_rtos_task(void *pvParameter)
@@ -285,7 +292,7 @@ static void lvgl_rtos_task(void *pvParameter)
             lv_timer_handler();
             xSemaphoreGive(xGuiSemaphore);
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(LVGL_TASK_PERIOD_MS));
     }
 }
 
@@ -355,10 +362,11 @@ void Hal::lvgl_init()
     lv_display_set_driver_data(disp, _display.get());
     lv_display_set_flush_cb(disp, lvgl_flush_cb);
 
-    static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
-    static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(_display->width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
-    lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, _display->width() * LV_BUFFER_LINE,
-                           LV_DISPLAY_RENDER_MODE_PARTIAL);
+    static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(LV_BUFFER_BYTES, MALLOC_CAP_SPIRAM);
+    static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(LV_BUFFER_BYTES, MALLOC_CAP_SPIRAM);
+    LV_ASSERT_MALLOC(buf1);
+    LV_ASSERT_MALLOC(buf2);
+    lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, LV_BUFFER_BYTES, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     lvTouchpad = lv_indev_create();
     LV_ASSERT_MALLOC(lvTouchpad);
@@ -375,7 +383,7 @@ void Hal::lvgl_init()
     const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
     esp_timer_handle_t periodic_timer;
     ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, LVGL_TASK_PERIOD_MS * 1000));
     xTaskCreate(lvgl_rtos_task, "lvgl_rtos_task", 4096 * 4, NULL, 1, NULL);
 
     startLvglUpdate();

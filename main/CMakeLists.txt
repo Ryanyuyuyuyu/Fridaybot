@@ -20,6 +20,33 @@ idf_component_register(
         ${MY_SRCS}
     INCLUDE_DIRS 
         ${MY_INCS}
+    REQUIRES
+        bt
+        smooth_ui_toolkit
+        mooncake
+        mooncake_log
+        lvgl
+        M5GFX
+        M5IOE1
+        M5PM1
+        BMI270_BMM150_Sensor
+        ArduinoJson
+        78__esp-wifi-connect
+        espressif__esp-dsp
+        espressif__esp_codec_dev
+        espressif__i2c_bus
+        driver
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_i2s
+        esp_event
+        esp_http_server
+        esp_netif
+        esp_timer
+        esp_wifi
+        fatfs
+        nvs_flash
+        wear_levelling
     EMBED_FILES
         "assets/sfx/boot_sfx.bin"
     EMBED_TXTFILES

@@ -203,6 +203,7 @@ static std::unique_ptr<DynamicIconLabel> _dynamic_icon_label;
 LauncherView::~LauncherView()
 {
     _icon_images.clear();
+    _icon_decorations.clear();
     _icon_panels.clear();
     _lr_indicators_images.clear();
     _lr_indicator_panels.clear();
@@ -273,6 +274,27 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
                 _icon_images.push_back(std::make_unique<Image>(_icon_panels.back()->get()));
                 _icon_images.back()->setSrc(props.info.icon);
                 _icon_images.back()->setAlign(LV_ALIGN_CENTER);
+            } else if (props.info.name == "Friday") {
+                // Friday's launcher icon uses the same lightweight vector
+                // language as the face: two silver-white capsules on black.
+                for (int eye = 0; eye < 2; ++eye) {
+                    _icon_decorations.push_back(std::make_unique<Container>(_icon_panels.back()->get()));
+                    auto& eye_obj   = *_icon_decorations.back();
+                    const int width = eye == 0 ? 34 : 32;
+                    eye_obj.setSize(width, 78);
+                    eye_obj.setBgColor(lv_color_hex(0xEEF1F3));
+                    eye_obj.setBgOpa(LV_OPA_COVER);
+                    eye_obj.setBorderWidth(0);
+                    eye_obj.setOutlineWidth(0);
+                    eye_obj.setShadowWidth(0);
+                    eye_obj.setPaddingAll(0);
+                    eye_obj.setRadius(width / 2);
+                    eye_obj.setTransformPivot(width / 2, 39);
+                    eye_obj.setRotation(eye == 0 ? 70 : -15);
+                    eye_obj.align(LV_ALIGN_CENTER, eye == 0 ? -42 : 42, 0);
+                    eye_obj.removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+                    eye_obj.removeFlag(LV_OBJ_FLAG_CLICKABLE);
+                }
             }
 
             icon_x += _icon_gap;

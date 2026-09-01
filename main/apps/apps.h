@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include "app_friday/app_friday.h"
 #include "app_template/app_template.h"
 #include "app_launcher/app_launcher.h"
 #include "app_watch_face/app_watch_face.h"

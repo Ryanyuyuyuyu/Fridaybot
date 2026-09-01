@@ -30,6 +30,7 @@ extern "C" void app_main(void)
 
     // Install apps
     GetMooncake().installApp(std::make_unique<AppLauncher>());
+    GetMooncake().installApp(std::make_unique<AppFriday>());
     GetMooncake().installApp(std::make_unique<AppAlarmClock>());
     GetMooncake().installApp(std::make_unique<AppWatchFace>());
     GetMooncake().installApp(std::make_unique<AppStopWatch>());

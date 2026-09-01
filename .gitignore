@@ -63,3 +63,7 @@ obj/
 
 sdkconfig
 sdkconfig.old
+
+# Local hardware recovery images, flash dumps, and device-specific NVS data.
+# Keep these available on the development machine but never publish them.
+/recovery/
