@@ -34,7 +34,4 @@ compile_and_run context_link_bridge_test \
     "$test_repo_root/tests/context_link_bridge_test.cpp" \
     "$test_repo_root/main/apps/app_friday/context_link.cpp"
 
-compile_and_run codex_micro_mode_test \
-    "$test_repo_root/tests/codex_micro_mode_test.cpp"
-
 "$test_python" "$test_repo_root/tests/firmware_integration_contract_test.py" "$test_repo_root"

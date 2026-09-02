@@ -267,6 +267,100 @@ def test_friday_gatt_and_advertising(root: Path, contract: Contract) -> None:
     contract.require(b"Codex Micro" in names, "the paired Codex Micro device name must remain in scan response")
 
 
+def test_codex_has_no_legacy_chat_dashboard(root: Path, contract: Contract) -> None:
+    app_path = "main/apps/app_codex_micro/app_codex_micro.cpp"
+    app = strip_cpp_comments(read(root, app_path))
+    codex_sources = {
+        app_path: app,
+        "main/apps/app_codex_micro/app_codex_micro.h": strip_cpp_comments(
+            read(root, "main/apps/app_codex_micro/app_codex_micro.h")
+        ),
+        "main/apps/app_codex_micro/view/view.cpp": strip_cpp_comments(
+            read(root, "main/apps/app_codex_micro/view/view.cpp")
+        ),
+        "main/apps/app_codex_micro/view/view.h": strip_cpp_comments(
+            read(root, "main/apps/app_codex_micro/view/view.h")
+        ),
+    }
+
+    forbidden_tokens = (
+        "DashboardMode::Chat",
+        "ModeButtonGesture",
+        "ToggleMode",
+        "toggleDashboardMode",
+        "selectChatSlot",
+        "ChatSlotVisual",
+        "LOCAL PREVIEW",
+        "kChatAccentColor",
+        "kChatPanelColor",
+        "kChatMutedText",
+        "_dashboard_mode",
+        "_mode_button_gesture",
+        "_chat_slots",
+        "_selected_chat_slot",
+        "local_chat_slots",
+        "beginModeTransition",
+        "_discard_touch_until_release",
+        "_codex_mode_active",
+        "model.chats",
+    )
+    for path, source in codex_sources.items():
+        for token in forbidden_tokens:
+            contract.require(token not in source, f"{path} still contains legacy Chat token {token!r}")
+        contract.require(
+            re.search(r"\bDashboardMode\b", source) is None,
+            f"{path} still contains the legacy DashboardMode type",
+        )
+
+    removed_paths = (
+        "main/apps/app_codex_micro/model/chat_mode_model.h",
+        "main/apps/app_codex_micro/model/chat_slot_config.h",
+        "main/apps/app_codex_micro/model/local_chat_slots.h.example",
+        "main/apps/app_codex_micro/model/mode_button_gesture.h",
+        "tests/codex_micro_mode_test.cpp",
+    )
+    for relative in removed_paths:
+        contract.require(not (root / relative).exists(), f"legacy Chat-only file still exists: {relative}")
+
+    button_body = function_body(app, "void AppCodexMicro::handlePhysicalButtons")
+    contract.require(bool(button_body), "Codex physical-button handler is missing")
+    press_guard = re.search(r"if\s*\(\s*left_pressed_edge\s*&&\s*!_left_mic_pressed\s*\)", button_body)
+    release_guard = re.search(r"if\s*\(\s*left_released_edge\s*&&\s*_left_mic_pressed\s*\)", button_body)
+    press_report = re.search(r"sendKey\s*\(\s*kLeftMicKey\s*,\s*1\s*\)", button_body)
+    release_report = re.search(r"sendKey\s*\(\s*kLeftMicKey\s*,\s*0\s*\)", button_body)
+    contract.require(press_guard is not None and press_report is not None, "physical A must press ACT10 directly")
+    contract.require(release_guard is not None and release_report is not None, "physical A must release ACT10 directly")
+    chord_position = button_body.find("beginButtonChord()")
+    press_position = button_body.find("sendKey(kLeftMicKey, 1)")
+    contract.require(
+        chord_position >= 0 and press_position >= 0 and chord_position < press_position,
+        "A+B Home chord must be evaluated before physical A can emit ACT10",
+    )
+
+    control_contracts = (
+        ("beginRightCommandPulse(now)", "physical B command pulse"),
+        ("beginAgentPulse(intent.agent, now)", "Agent touch pulse"),
+        ("beginSendPulse(now)", "center Send pulse"),
+        ("close()", "A+B local launcher return"),
+    )
+    for token, description in control_contracts:
+        contract.require(token in app, f"Codex-only dashboard lost {description}")
+
+    key_contracts = (
+        (r'kRightCommandKey\[\]\s*=\s*"ACT09"', "physical B ACT09 mapping"),
+        (r'kSendKey\[\]\s*=\s*"ACT12"', "center Send ACT12 mapping"),
+        (
+            r'"AG00"\s*,\s*"AG01"\s*,\s*"AG02"\s*,\s*"AG03"\s*,\s*"AG04"\s*,\s*"AG05"',
+            "six Codex Agent mappings",
+        ),
+    )
+    for pattern, description in key_contracts:
+        contract.require(re.search(pattern, app) is not None, f"Codex-only dashboard lost {description}")
+
+    view = codex_sources["main/apps/app_codex_micro/view/view.cpp"]
+    contract.require("playSendPulse()" in view, "Codex-only dashboard lost the Send feedback animation")
+
+
 def test_codex_dot_two_ring_contract(root: Path, contract: Contract) -> None:
     service = strip_cpp_comments(read(root, "main/services/codex_micro/codex_micro_service.cpp"))
     app = strip_cpp_comments(read(root, "main/apps/app_codex_micro/app_codex_micro.cpp"))
@@ -326,6 +420,7 @@ def main() -> None:
     test_launcher(root, contract)
     test_single_bluetooth_host(root, contract)
     test_friday_gatt_and_advertising(root, contract)
+    test_codex_has_no_legacy_chat_dashboard(root, contract)
     test_codex_dot_two_ring_contract(root, contract)
     contract.finish()
 

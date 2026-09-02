@@ -31,9 +31,6 @@ constexpr uint32_t kFiveHourHighlight = 0x9DE1CC;
 constexpr uint32_t kSendTextColor     = 0xEDF2F4;
 constexpr uint32_t kMetricDivider     = 0x34414A;
 constexpr uint32_t kReticleColor      = 0x4C5B65;
-constexpr uint32_t kChatAccentColor   = 0xA78BFA;
-constexpr uint32_t kChatPanelColor    = 0x211B35;
-constexpr uint32_t kChatMutedText     = 0xB9A9E8;
 constexpr size_t kIntentQueueDepth    = 24;
 constexpr int32_t kLimitArcWidth      = 9;
 constexpr int32_t kLimitValueScale    = 10;
@@ -297,7 +294,7 @@ void DashboardView::handleLimitAnimationCompleted(lv_anim_t* animation)
 void DashboardView::applySendPulseAnimationValue(void* context, int32_t value)
 {
     auto* view = static_cast<DashboardView*>(context);
-    if (view == nullptr || !view->_codex_mode_active || view->_send_label == nullptr || view->_send_ripple == nullptr) {
+    if (view == nullptr || view->_send_label == nullptr || view->_send_ripple == nullptr) {
         return;
     }
 
@@ -382,33 +379,9 @@ void DashboardView::updateLimitIndicator(LimitIndicator& indicator, float usedPe
     lv_anim_start(&animation);
 }
 
-void DashboardView::setLimitIndicatorVisible(LimitIndicator& indicator, bool visible)
-{
-    setVisualVisible(indicator.arc, visible);
-    setVisualVisible(indicator.nameLabel, visible);
-    setVisualVisible(indicator.valueLabel, visible);
-    setVisualVisible(indicator.percentLabel, visible && indicator.available);
-    setVisualVisible(indicator.highlight, visible && indicator.available && indicator.displayedValue > 0);
-    setVisualVisible(indicator.head, visible && indicator.available && indicator.displayedValue > 0);
-}
-
-void DashboardView::setCodexInstrumentVisible(bool visible)
-{
-    setVisualVisible(_center_surface, visible);
-    setVisualVisible(_metric_divider, visible);
-    setVisualVisible(_send_ripple, visible);
-    setVisualVisible(_send_left_line, visible);
-    setVisualVisible(_send_right_line, visible);
-    setVisualVisible(_send_left_dot, visible);
-    setVisualVisible(_send_right_dot, visible);
-    setVisualVisible(_send_mark, visible);
-    setLimitIndicatorVisible(_weekly_limit, visible);
-    setLimitIndicatorVisible(_five_hour_limit, visible);
-}
-
 void DashboardView::playSendPulse()
 {
-    if (!_codex_mode_active || _send_ripple == nullptr) {
+    if (_send_ripple == nullptr) {
         return;
     }
 
@@ -429,7 +402,7 @@ void DashboardView::playSendPulse()
 void DashboardView::restoreSendPulseVisuals()
 {
     if (_send_label != nullptr) {
-        lv_obj_set_style_text_letter_space(_send_label, _codex_mode_active ? 4 : 0, LV_PART_MAIN);
+        lv_obj_set_style_text_letter_space(_send_label, 4, LV_PART_MAIN);
     }
     if (_send_ripple != nullptr) {
         lv_obj_set_style_transform_scale(_send_ripple, 256, LV_PART_MAIN);
@@ -666,14 +639,6 @@ bool DashboardView::popIntent(TouchIntent& intent)
     return _intent_queue != nullptr && xQueueReceive(_intent_queue, &intent, 0) == pdTRUE;
 }
 
-void DashboardView::beginModeTransition(bool touchActive)
-{
-    if (_intent_queue != nullptr) {
-        xQueueReset(_intent_queue);
-    }
-    _discard_touch_until_release = touchActive;
-}
-
 void DashboardView::update(const DashboardModel& model)
 {
     if (_root == nullptr) {
@@ -684,78 +649,19 @@ void DashboardView::update(const DashboardModel& model)
     lv_obj_set_style_text_color(_connection_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
     lv_label_set_text(_battery_label, model.batteryText.c_str());
 
-    const bool codexMode = model.mode == codex_micro_app::model::DashboardMode::Codex;
-    if (codexMode != _codex_mode_active) {
-        lv_anim_delete(this, applySendPulseAnimationValue);
-        if (!codexMode) {
-            lv_anim_delete(&_weekly_limit, applyLimitAnimationValue);
-            lv_anim_delete(&_five_hour_limit, applyLimitAnimationValue);
-            _weekly_limit.animating    = false;
-            _five_hour_limit.animating = false;
-        }
-        _codex_mode_active = codexMode;
-        restoreSendPulseVisuals();
-    }
-
-    if (model.mode == codex_micro_app::model::DashboardMode::Chat) {
-        setCodexInstrumentVisible(false);
-        lv_obj_clear_flag(_quota_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(_reset_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(_home_hint_label, LV_OBJ_FLAG_HIDDEN);
-        const ChatSlotVisual* selected = nullptr;
-        for (const auto& chat : model.chats) {
-            if (chat.available && chat.selected) {
-                selected = &chat;
-                break;
-            }
-        }
-        lv_obj_set_style_text_font(_quota_label, &lv_font_montserrat_28, LV_PART_MAIN);
-        lv_label_set_text(_quota_label, selected != nullptr ? selected->title.c_str() : "NO CHATS");
-        lv_label_set_text(_reset_label, selected != nullptr ? selected->project.c_str() : "ADD LOCAL SLOTS");
-        lv_label_set_text(_send_label, "LOCAL PREVIEW");
-        lv_obj_set_style_text_font(_send_label, &lv_font_montserrat_18, LV_PART_MAIN);
-        lv_obj_set_style_text_letter_space(_send_label, 0, LV_PART_MAIN);
-        lv_obj_align(_send_label, LV_ALIGN_CENTER, 0, 49);
-        lv_obj_set_style_text_color(_send_label, lv_color_hex(kChatAccentColor), LV_PART_MAIN);
-        lv_obj_set_style_border_width(_quota_button, 10, LV_PART_MAIN);
-        lv_obj_set_style_border_color(_quota_button, lv_color_hex(selected != nullptr ? kChatAccentColor : kTrackColor),
-                                      LV_PART_MAIN);
-    } else {
-        setCodexInstrumentVisible(true);
-        updateLimitIndicator(_five_hour_limit, model.fiveHourUsedPercent, model.fiveHourLimitAvailable, 520, 0);
-        updateLimitIndicator(_weekly_limit, model.weeklyUsedPercent, model.weeklyLimitAvailable, 620, 70);
-        lv_obj_add_flag(_quota_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(_reset_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(_home_hint_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_text_font(_send_label, &lv_font_montserrat_16, LV_PART_MAIN);
-        lv_obj_set_style_text_letter_space(_send_label, 4, LV_PART_MAIN);
-        lv_label_set_text(_send_label, "SEND");
-        lv_obj_align(_send_label, LV_ALIGN_CENTER, 1, 29);
-        lv_obj_set_style_text_color(_send_label, lv_color_hex(kSendTextColor), LV_PART_MAIN);
-        lv_obj_set_style_border_width(_quota_button, 0, LV_PART_MAIN);
-    }
+    updateLimitIndicator(_five_hour_limit, model.fiveHourUsedPercent, model.fiveHourLimitAvailable, 520, 0);
+    updateLimitIndicator(_weekly_limit, model.weeklyUsedPercent, model.weeklyLimitAvailable, 620, 70);
+    lv_obj_add_flag(_quota_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(_reset_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(_home_hint_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_font(_send_label, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(_send_label, 4, LV_PART_MAIN);
+    lv_label_set_text(_send_label, "SEND");
+    lv_obj_align(_send_label, LV_ALIGN_CENTER, 1, 29);
+    lv_obj_set_style_text_color(_send_label, lv_color_hex(kSendTextColor), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_quota_button, 0, LV_PART_MAIN);
 
     for (size_t i = 0; i < _agent_buttons.size(); ++i) {
-        if (model.mode == codex_micro_app::model::DashboardMode::Chat) {
-            const auto& chat     = model.chats[i];
-            const uint32_t fill  = chat.available ? (chat.selected ? 0x6552C7 : kChatPanelColor) : kPanelColor;
-            const uint32_t edge  = chat.available ? kChatAccentColor : kTrackColor;
-            const uint32_t label = chat.selected ? kPrimaryText : (chat.available ? kChatMutedText : kSecondaryText);
-
-            lv_label_set_text(_agent_labels[i], chat.available ? chat.alias.c_str() : "--");
-            lv_obj_set_style_text_font(_agent_labels[i], &lv_font_montserrat_18, LV_PART_MAIN);
-            lv_obj_set_style_bg_color(_agent_buttons[i], lv_color_hex(fill), LV_PART_MAIN);
-            lv_obj_set_style_border_color(_agent_buttons[i], lv_color_hex(edge), LV_PART_MAIN);
-            lv_obj_set_style_outline_color(_agent_buttons[i], lv_color_hex(kPrimaryText), LV_PART_MAIN);
-            lv_obj_set_style_outline_opa(_agent_buttons[i], chat.selected ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN);
-            lv_obj_set_style_shadow_color(_agent_buttons[i], lv_color_hex(kChatAccentColor), LV_PART_MAIN);
-            lv_obj_set_style_shadow_opa(
-                _agent_buttons[i], chat.selected ? static_cast<lv_opa_t>(70) : static_cast<lv_opa_t>(LV_OPA_TRANSP),
-                LV_PART_MAIN);
-            lv_obj_set_style_text_color(_agent_labels[i], lv_color_hex(label), LV_PART_MAIN);
-            continue;
-        }
-
         const auto& agent        = model.agents[i];
         const AgentStatus status = classifyAgent(agent);
         const float brightness   = std::clamp(agent.brightness, 0.0f, 1.0f);
@@ -793,13 +699,6 @@ void DashboardView::handleTouchEvent(lv_event_t* event)
 
     auto* binding = static_cast<TouchBinding*>(lv_event_get_user_data(event));
     if (binding == nullptr || binding->owner == nullptr) {
-        return;
-    }
-
-    if (binding->owner->_discard_touch_until_release) {
-        if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-            binding->owner->_discard_touch_until_release = false;
-        }
         return;
     }
 
@@ -850,10 +749,6 @@ void DashboardView::handleGestureEvent(lv_event_t* event)
     if (owner == nullptr || indev == nullptr) {
         return;
     }
-    if (owner->_discard_touch_until_release) {
-        return;
-    }
-
     TouchIntent intent;
     intent.type = TouchIntentType::AnalogPulse;
     switch (lv_indev_get_gesture_dir(indev)) {

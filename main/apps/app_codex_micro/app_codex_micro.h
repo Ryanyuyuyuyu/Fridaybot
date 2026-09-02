@@ -5,8 +5,6 @@
  */
 #pragma once
 
-#include "model/chat_mode_model.h"
-#include "model/mode_button_gesture.h"
 #include "view/view.h"
 
 #include <apps/common/key_manager/key_manager.h>
@@ -32,12 +30,9 @@ private:
     static constexpr uint32_t BatteryUpdateIntervalMs = 30000;
     static constexpr uint32_t ViewUpdateIntervalMs    = 1000;
 
-    bool handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent);
+    void handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent);
     void beginButtonChord();
     void finishButtonChordIfReleased();
-    void cancelModeButtonGesture();
-    void toggleDashboardMode(uint32_t now);
-    void selectChatSlot(int index, uint32_t now);
     void processTouchIntents(uint32_t now);
     void updatePendingReleases(uint32_t now);
     void updateBattery(uint32_t now, bool force = false);
@@ -52,11 +47,6 @@ private:
 
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<codex_micro_app::view::DashboardView> _view;
-
-    codex_micro_app::model::ModeButtonGesture _mode_button_gesture;
-    codex_micro_app::model::DashboardMode _dashboard_mode = codex_micro_app::model::DashboardMode::Codex;
-    codex_micro_app::model::ChatSlots _chat_slots         = {};
-    size_t _selected_chat_slot                            = 0;
 
     std::array<bool, 6> _agent_pressed        = {};
     std::array<uint32_t, 6> _agent_release_at = {};
