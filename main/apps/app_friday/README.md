@@ -45,11 +45,13 @@ there are no per-frame allocations or bitmap animation frames.
 - Touch reactions prioritize uninterrupted eye animation over haptic feedback
   because the current motor driver occupies the shared peripheral bus long
   enough to cause visible frame stalls.
-- A/yellow button: the upper-left corner visibly bumps Friday down-right;
-  Friday then snaps back to stare at the corner, holds a suspicious asymmetric
-  capsule pose, leans in, breathes, performs a wary double-take and a second
-  flinch, then reluctantly springs home. The complete performance is about
-  4.2 seconds, followed by a quieter suspicious afterglow.
+- A/yellow button: hold to record a Flash Capsule with the StopWatch's built-in
+  microphone and stream it to the connected Mac in 20 ms chunks. A green ring
+  grows around Friday for at most 60 seconds; release finishes the capture and
+  waits for a durable-save acknowledgement. A full green ring plus a playful
+  expression means saved, orange/red means failure, and a capture shorter than
+  0.8 seconds is silently discarded as accidental. The previous A-button face
+  performance is intentionally removed.
 - B/blue button: a mirrored upper-right bump turns into a game. Friday chases
   that corner, plays around it, feints toward centre, returns for a celebratory
   pair of alternating capsule hops and takes an elastic route home. The full
@@ -61,7 +63,8 @@ there are no per-frame allocations or bitmap animation frames.
   the eyes disappear. A visibility barrier then releases a matching circular
   Friday to peek around the Mac's outer display edge before sneaking in. Click
   it for a reaction, drag it through attached displays, or drag it back to its
-  portal edge to return. Either StopWatch button recalls it. A second return
+  portal edge to return. StopWatch B recalls it; A remains dedicated to Flash
+  Capsule recording. A second return
   barrier prevents the face from reappearing locally until the Mac panel is
   fully hidden. Missing acknowledgements or BLE disconnects restore it safely.
 - Hold both buttons: return to the original M5Stack launcher.
@@ -92,11 +95,16 @@ there are no per-frame allocations or bitmap animation frames.
   instead of the normal petted response. A `returned` context triggers the
   same distinct "you're back" emotion.
 
-## Optional Mac context
+## Optional Mac context and Flash Capsules
 
-The local macOS helper sends only coarse presence and travel state over BLE.
-Friday never receives keystrokes, pointer coordinates, window titles, URLs,
-camera or microphone data. When Friday lives on the Mac, the overlay uses the
+The local macOS helper sends only coarse presence and travel state to Friday.
+Friday never receives keystrokes, pointer coordinates, window titles, URLs, or
+camera data. During an intentional A-button capture, the helper receives the
+StopWatch microphone stream over a separate encrypted BLE characteristic and
+feeds it into live transcription while writing a temporary recovery file.
+Successful transcription stores only text in today's local todo/memo inbox;
+failed or low-confidence recognition keeps the audio for at most 24 hours.
+When Friday lives on the Mac, the overlay uses the
 current pointer position locally to direct its gaze; it does not retain or
 transmit that position. The helper is an enhancement rather than a dependency:
 

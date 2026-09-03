@@ -13,8 +13,16 @@ over low-duty BLE. It also lets the same Friday travel between the StopWatch
 and every display attached to the Mac, with locally rendered animation and
 two-phase visibility barriers that prevent duplicate faces. Disconnecting the
 helper leaves Friday's local personality intact.
-Voice conversation will be considered after the face and physical interaction
-are validated on hardware.
+Friday now also has a Mac-connected Flash Capsule prototype: hold A to stream
+the StopWatch microphone into live transcription, then release to save the
+text in today's combined todo/memo inbox. Audio is only a temporary recovery
+file: successful transcription deletes it immediately, while failed or
+low-confidence transcription retains it for at most 24 hours. Live voice
+conversation remains a separate future feature.
+
+Flash Capsule audio duration, clarity, and transcription accuracy are still
+under hardware validation. A successful build or boot is not an audio-quality
+acceptance test.
 
 See [`main/apps/app_friday/README.md`](main/apps/app_friday/README.md) for the
 interaction map and animation budget.
@@ -35,6 +43,8 @@ implemented StopWatch-to-Mac travel protocol.
   animation
 - A single draggable macOS panel that can cross attached displays without
   creating a second Friday
+- A-button Flash Capsules with 60-second streaming transcription, temporary
+  recovery audio, and one daily todo/memo inbox
 
 [简体中文](README.zh-CN.md)
 
@@ -116,15 +126,16 @@ test: it also writes the bootloader, partition table, and OTA metadata. Preserve
 a verified full-flash backup and known-good slot, then write only the inactive
 OTA App slot with a command derived from the device's current partition table.
 
-### Controls
+### Friday controls
 
 - Tap, hold, drag, edge-drag and swipe: distinct touch performances
-- Yellow button: upper-left bump, wary watch and reluctant spring home
+- Hold the yellow A button: record and stream a Flash Capsule to the connected
+  Mac; release to finish (60 seconds maximum, under 0.8 seconds is discarded)
 - Blue button: upper-right bump, playful chase, feint and celebratory hops
 - Drag Friday to the configured bezel edge: send it to the connected Mac
 - On Mac: click to interact, hold and drag to move it, or drag it back to its
   outer portal edge to return
-- While Friday is on Mac: press either StopWatch button to recall it
+- While Friday is on Mac: press B to recall it; A still records a Flash Capsule
 - Hold both buttons: return to the original launcher
 
 ## macOS Companion
@@ -132,12 +143,13 @@ OTA App slot with a command derived from the device's current partition table.
 ```bash
 cd companion/macos
 make
-build/FridayCompanion.app/Contents/MacOS/friday-companion --monitor-side centre
+open -n build/FridayCompanion.app --args --monitor-side centre
 ```
 
 The companion does not read keystrokes, documents, URLs, screenshots, camera
-frames or microphone audio. See its README for the complete privacy and
-interaction model.
+frames, or the Mac microphone. During an intentional A-button capture it does
+receive the StopWatch microphone stream and stores it locally. See its README
+for the complete storage, speech-recognition, privacy, and interaction model.
 
 ## Upstream and license
 
@@ -167,10 +179,13 @@ M5Stack's general StopWatch operating guide is available in the
   launcher is the cold-boot surface and places them next to one another.
 - Codex Micro has one Codex-only dashboard registered beside the factory Apps;
   it has no hidden Chat preview mode.
-- Physical A reports `ACT10` directly on press and release. The A+B Home chord
+- In the Codex App, physical A reports `ACT10` directly on press and release. The A+B Home chord
   is evaluated first so entering the launcher cannot leave PTT held down.
 - One native ESP-IDF Bluedroid service owns BLE outside both UI lifecycles. It
-  publishes Codex HID/quota plus Friday context/travel in one GATT database.
+  publishes Codex HID/quota plus Friday context/travel/Flash Capsule channels
+  in one GATT database.
+- Flash Capsule audio has its own BLE queue behind Codex commands and releases;
+  regression tests also pin the verified Codex UI/controller source hashes.
 - LVGL callbacks enqueue touch intents; the App loop sends BLE controls and
   pairs every press with a release.
 - Holding A+B uses the factory `KeyManager` Home gesture and calls the local App

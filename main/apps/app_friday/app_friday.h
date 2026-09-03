@@ -7,12 +7,16 @@
 
 #include "face_model.h"
 #include "presence_protocol.h"
+#include "capsule/capsule_codec.h"
+#include "capsule/capsule_link.h"
 #include "view/face_view.h"
 
 #include <apps/common/key_manager/key_manager.h>
 #include <atomic>
+#include <array>
 #include <memory>
 #include <mooncake.h>
+#include <vector>
 
 class AppFriday : public mooncake::AppAbility {
 public:
@@ -32,8 +36,19 @@ private:
         Returning,
     };
 
+    enum class CapsuleState : uint8_t {
+        Idle,
+        Recording,
+        AwaitingSave,
+        Saved,
+        Failed,
+    };
+
     static constexpr uint32_t AnimationIntervalMs = 16;  // 62.5 Hz target
     static constexpr uint32_t ImuSampleIntervalMs = 30;  // 33 Hz; spring interpolation stays at 62.5 Hz
+    static constexpr uint32_t CapsuleMinimumMs = 800;
+    static constexpr uint32_t CapsuleAckTimeoutMs = 8000;
+    static constexpr float CapsuleMicGainDb = 12.0f;
 
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<friday::view::FaceView> _view;
@@ -65,6 +80,20 @@ private:
     bool _host_accepted            = false;
     bool _departure_announced      = false;
     bool _face_visible             = true;
+    CapsuleState _capsule_state    = CapsuleState::Idle;
+    uint16_t _capsule_session      = 0;
+    uint16_t _capsule_sequence     = 0;
+    uint32_t _capsule_started_ms   = 0;
+    uint32_t _capsule_deadline_ms  = 0;
+    uint32_t _capsule_feedback_until_ms = 0;
+    uint32_t _last_capsule_ack_generation = 0;
+    uint32_t _capsule_total_samples = 0;
+    FridayCapsuleAdpcmState _capsule_adpcm{};
+    FridayCapsuleResamplerState _capsule_resampler{};
+    std::vector<int16_t> _capsule_input;
+    std::array<int16_t, FRIDAY_CAPSULE_CAPTURE_SAMPLES> _capsule_resampled{};
+    std::array<uint8_t, FRIDAY_CAPSULE_ADPCM_BYTES> _capsule_encoded{};
+    std::array<uint8_t, FRIDAY_CAPSULE_MAX_PACKET_SIZE> _capsule_packet{};
 
     void updateImu(uint32_t nowMs);
     void updateCompanionContext(uint32_t nowMs);
@@ -73,4 +102,10 @@ private:
     void recallFromHost(uint32_t nowMs);
     void beginPresenceReturn(uint32_t nowMs);
     void handleInputs(uint32_t nowMs);
+    void beginCapsule(uint32_t nowMs);
+    void captureCapsuleAudio();
+    void finishCapsule(FridayCapsuleEndReason reason, uint32_t nowMs);
+    void failCapsule(uint32_t nowMs);
+    void updateCapsule(uint32_t nowMs);
+    void updateCapsuleVisual(uint32_t nowMs);
 };

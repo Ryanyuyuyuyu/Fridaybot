@@ -15,6 +15,8 @@ namespace {
 constexpr int DisplaySize      = 466;
 constexpr uint32_t FaceColor   = 0x000000;
 constexpr uint32_t EyeColor    = 0xEEF1F3;
+constexpr uint32_t CapsuleGreen = 0x43D17A;
+constexpr uint32_t CapsuleError = 0xF06A4F;
 constexpr int MinimumEyeHeight = 7;
 constexpr int DragThresholdPx  = 18;
 constexpr int SwipeThresholdPx = 68;
@@ -50,6 +52,23 @@ void FaceView::init(lv_obj_t* parent)
 
     _right_eye = std::make_unique<uitk::lvgl_cpp::Container>(_panel->get());
     configureEye(*_right_eye);
+
+    _capsule_arc = lv_arc_create(_panel->get());
+    lv_obj_set_size(_capsule_arc, 438, 438);
+    lv_obj_center(_capsule_arc);
+    lv_arc_set_rotation(_capsule_arc, 270);
+    lv_arc_set_bg_angles(_capsule_arc, 0, 360);
+    lv_arc_set_range(_capsule_arc, 0, 1000);
+    lv_arc_set_value(_capsule_arc, 0);
+    lv_obj_remove_style(_capsule_arc, nullptr, LV_PART_KNOB);
+    lv_obj_set_style_arc_width(_capsule_arc, 10, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(_capsule_arc, 10, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(_capsule_arc, lv_color_hex(CapsuleGreen), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(_capsule_arc, lv_color_hex(CapsuleGreen), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(_capsule_arc, LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(_capsule_arc, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_remove_flag(_capsule_arc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(_capsule_arc, LV_OBJ_FLAG_HIDDEN);
 
     // The transparent surface owns touch interaction. Keeping it separate from
     // the eyes avoids hit-box changes while the eye geometry is animated.
@@ -108,10 +127,44 @@ void FaceView::setFaceVisible(bool visible)
     if (visible) {
         _left_eye->removeFlag(LV_OBJ_FLAG_HIDDEN);
         _right_eye->removeFlag(LV_OBJ_FLAG_HIDDEN);
+        if (_capsule_arc != nullptr && _capsule_state != CapsuleVisualState::Hidden) {
+            lv_obj_remove_flag(_capsule_arc, LV_OBJ_FLAG_HIDDEN);
+        }
     } else {
         _left_eye->addFlag(LV_OBJ_FLAG_HIDDEN);
         _right_eye->addFlag(LV_OBJ_FLAG_HIDDEN);
+        if (_capsule_arc != nullptr) {
+            lv_obj_add_flag(_capsule_arc, LV_OBJ_FLAG_HIDDEN);
+        }
     }
+}
+
+void FaceView::setCapsuleVisual(CapsuleVisualState state, float progress)
+{
+    if (_capsule_arc == nullptr) {
+        return;
+    }
+    _capsule_state = state;
+    if (state == CapsuleVisualState::Hidden || !_face_visible) {
+        lv_obj_add_flag(_capsule_arc, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_remove_flag(_capsule_arc, LV_OBJ_FLAG_HIDDEN);
+    const bool failed = state == CapsuleVisualState::Failed;
+    const uint32_t color = failed ? CapsuleError : CapsuleGreen;
+    lv_obj_set_style_arc_color(_capsule_arc, lv_color_hex(color), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(_capsule_arc, lv_color_hex(color), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(_capsule_arc, failed ? LV_OPA_30 : LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(_capsule_arc, LV_OPA_COVER, LV_PART_INDICATOR);
+
+    float clampedProgress = std::max(0.0f, std::min(1.0f, progress));
+    if (state == CapsuleVisualState::Saved || state == CapsuleVisualState::Failed) {
+        clampedProgress = 1.0f;
+    } else if (state == CapsuleVisualState::AwaitingSave) {
+        clampedProgress = 0.86f + clampedProgress * 0.14f;
+    }
+    lv_arc_set_value(_capsule_arc, static_cast<int32_t>(std::lround(clampedProgress * 1000.0f)));
 }
 
 void FaceView::configureEye(uitk::lvgl_cpp::Container& eye)

@@ -3,6 +3,8 @@
 
 #include "services/codex_micro/codex_micro_service.h"
 
+#include "apps/app_friday/capsule/capsule_link.h"
+#include "apps/app_friday/capsule/capsule_protocol.h"
 #include "apps/app_friday/context_link.h"
 #include "services/codex_micro/codex_micro_gatt_db.h"
 
@@ -42,6 +44,7 @@ constexpr UBaseType_t kControlQueueDepth = 32;
 constexpr UBaseType_t kWriteQueueDepth   = 12;
 constexpr UBaseType_t kCommandQueueDepth = 24;
 constexpr UBaseType_t kReleaseQueueDepth = 24;
+constexpr UBaseType_t kCapsuleQueueDepth = 24;
 constexpr uint32_t kWorkerStackBytes     = 12 * 1024;
 constexpr UBaseType_t kWorkerPriority    = 5;
 constexpr uint32_t kRpcAssemblyTimeoutMs = 1000;
@@ -49,7 +52,7 @@ constexpr uint32_t kReleaseRetryMs       = 25;
 constexpr uint32_t kAdvertisingRetryMs   = 500;
 constexpr uint32_t kStackRetryMs         = 1000;
 constexpr size_t kMaxEffectLength        = 31;
-constexpr uint8_t kGattSchemaRevision    = 3;
+constexpr uint8_t kGattSchemaRevision    = 4;
 constexpr char kNvsNamespace[]           = "codex-mic";
 constexpr char kNvsGattRevisionKey[]     = "gatt-rev";
 
@@ -111,6 +114,12 @@ enum class CommandType : uint8_t {
     kJoystick,
     kFridayTransfer,
     kFridayTravelMode,
+    kFridayCapsuleMode,
+};
+
+struct CapsuleFrame {
+    uint16_t length = 0;
+    uint8_t data[FRIDAY_CAPSULE_MAX_PACKET_SIZE] = {};
 };
 
 struct Command {
@@ -125,6 +134,7 @@ struct Command {
     char key[64];
     uint8_t fridayPacket[friday::presence::PacketSize];
     bool fridayTravelActive;
+    bool fridayCapsuleActive;
 };
 
 struct Connection {
@@ -138,6 +148,7 @@ struct Connection {
     bool secure                      = false;
     bool fridayPeer                  = false;
     bool fridayTransferNotifications = false;
+    bool fridayCapsuleNotifications  = false;
     uint32_t rpcLastFragmentAtMs     = 0;
     std::string rpcBuffer;
 };
@@ -180,6 +191,8 @@ struct Service::Impl {
     void enqueueJoystick(float angle, float distance);
     bool enqueueFridayTransfer(const uint8_t* packet, size_t length);
     bool enqueueFridayTravelMode(bool active);
+    bool enqueueFridayCapsule(const uint8_t* packet, size_t length);
+    bool enqueueFridayCapsuleMode(bool active);
 
     static void workerEntry(void* context);
     static void gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gattsIf, esp_ble_gatts_cb_param_t* param);
@@ -205,6 +218,7 @@ struct Service::Impl {
     void processWrite(const WriteEvent& write);
     void processCommand(const Command& command);
     bool processQueuedCommands();
+    bool processCapsuleFrames();
     bool processPendingReleases();
     bool processRpcTimeouts();
     void schedulePendingRelease(const Command& command);
@@ -223,6 +237,7 @@ struct Service::Impl {
     void handleQuotaWrite(const WriteEvent& write);
     void handleFridayContextWrite(const WriteEvent& write, Connection& connection);
     void handleFridayTransferWrite(const WriteEvent& write, Connection& connection);
+    void handleFridayCapsuleAckWrite(const WriteEvent& write, Connection& connection);
 
     bool handleRpc(const JsonDocument& request, uint16_t connectionId);
     void noteHostRpc(uint16_t connectionId);
@@ -235,6 +250,7 @@ struct Service::Impl {
     bool sendKeyNow(const char* key, uint8_t action, int8_t agent);
     bool sendJoystickNow(float angle, float distance);
     bool sendFridayTransferNow(const uint8_t* packet, size_t length);
+    bool sendFridayCapsuleNow(const uint8_t* packet, size_t length);
     void updateFridayConnectionIntervals(bool active);
     void setBatteryNow(uint8_t percentage, bool charging);
     void rememberKeyState(const char* key, uint8_t action, int8_t agent);
@@ -264,6 +280,7 @@ struct Service::Impl {
     QueueHandle_t writeQueue             = nullptr;
     QueueHandle_t commandQueue           = nullptr;
     QueueHandle_t releaseQueue           = nullptr;
+    QueueHandle_t capsuleQueue           = nullptr;
     mutable SemaphoreHandle_t stateMutex = nullptr;
     TaskHandle_t workerTask              = nullptr;
 
@@ -301,6 +318,7 @@ struct Service::Impl {
     bool joystickHeld       = false;
     float heldJoystickAngle = 0.0f;
     bool fridayTravelActive = false;
+    bool fridayCapsuleActive = false;
     uint16_t selectedFridayConnectionId = UINT16_MAX;
 };
 
@@ -343,8 +361,11 @@ bool Service::Impl::begin()
     if (releaseQueue == nullptr) {
         releaseQueue = xQueueCreate(kReleaseQueueDepth, sizeof(Command));
     }
+    if (capsuleQueue == nullptr) {
+        capsuleQueue = xQueueCreate(kCapsuleQueueDepth, sizeof(CapsuleFrame));
+    }
     if (stateMutex == nullptr || controlQueue == nullptr || writeQueue == nullptr || commandQueue == nullptr ||
-        releaseQueue == nullptr) {
+        releaseQueue == nullptr || capsuleQueue == nullptr) {
         ESP_LOGE(kTag, "failed to allocate BLE worker primitives");
         if (controlQueue != nullptr) {
             vQueueDelete(controlQueue);
@@ -362,6 +383,10 @@ bool Service::Impl::begin()
             vQueueDelete(releaseQueue);
             releaseQueue = nullptr;
         }
+        if (capsuleQueue != nullptr) {
+            vQueueDelete(capsuleQueue);
+            capsuleQueue = nullptr;
+        }
         if (stateMutex != nullptr) {
             vSemaphoreDelete(stateMutex);
             stateMutex = nullptr;
@@ -374,6 +399,7 @@ bool Service::Impl::begin()
     xQueueReset(writeQueue);
     xQueueReset(commandQueue);
     xQueueReset(releaseQueue);
+    xQueueReset(capsuleQueue);
     controlQueueLost.store(false);
     writeQueueLost.store(false);
     releaseQueueLost.store(false);
@@ -494,6 +520,41 @@ bool Service::Impl::enqueueFridayTravelMode(bool active)
     return true;
 }
 
+bool Service::Impl::enqueueFridayCapsule(const uint8_t* packet, size_t length)
+{
+    if (!started.load(std::memory_order_acquire) || capsuleQueue == nullptr || packet == nullptr ||
+        length < 4 || length > FRIDAY_CAPSULE_MAX_PACKET_SIZE ||
+        packet[0] != FRIDAY_CAPSULE_PROTOCOL_VERSION) {
+        return false;
+    }
+    CapsuleFrame frame{};
+    frame.length = static_cast<uint16_t>(length);
+    std::memcpy(frame.data, packet, length);
+    if (xQueueSend(capsuleQueue, &frame, 0) != pdTRUE) {
+        const uint16_t session = friday_capsule_read_u16(packet + 2);
+        friday::capsule::CapsuleLink::instance().noteTransportFailure(session, nowMs());
+        ESP_LOGW(kTag, "Friday capsule frame dropped: dedicated queue full");
+        return false;
+    }
+    return true;
+}
+
+bool Service::Impl::enqueueFridayCapsuleMode(bool active)
+{
+    if (!started.load(std::memory_order_acquire) || commandQueue == nullptr) {
+        return false;
+    }
+    Command command{};
+    command.type = CommandType::kFridayCapsuleMode;
+    command.sequence = nextCommandSequence.fetch_add(1, std::memory_order_relaxed);
+    command.fridayCapsuleActive = active;
+    if (xQueueSend(commandQueue, &command, 0) != pdTRUE) {
+        ESP_LOGW(kTag, "Friday capsule connection-mode update dropped: queue full");
+        return false;
+    }
+    return true;
+}
+
 void Service::Impl::workerEntry(void* context)
 {
     static_cast<Impl*>(context)->worker();
@@ -533,6 +594,9 @@ void Service::Impl::worker()
         }
 
         if (processQueuedCommands()) {
+            didWork = true;
+        }
+        if (processCapsuleFrames()) {
             didWork = true;
         }
         if (processPendingReleases()) {
@@ -973,8 +1037,9 @@ void Service::Impl::processControlEvent(const ControlEvent& event)
                     }
                 }
                 if (fridayHidLinkReady) {
-                    updateFridayConnectionIntervals(fridayTravelActive);
+                    updateFridayConnectionIntervals(fridayTravelActive || fridayCapsuleActive);
                 }
+                syncFridayLinkState();
                 ESP_LOGI(kTag, "BLE pairing complete");
             } else {
                 ESP_LOGW(kTag, "BLE pairing failed reason=0x%02x", event.value);
@@ -1220,8 +1285,12 @@ void Service::Impl::syncFridayLinkState()
         if (!connection.active || !connection.fridayPeer) {
             continue;
         }
-        if (selected == nullptr ||
-            (connection.fridayTransferNotifications && !selected->fridayTransferNotifications)) {
+        const unsigned score = (connection.fridayCapsuleNotifications ? 2U : 0U) +
+                               (connection.fridayTransferNotifications ? 1U : 0U);
+        const unsigned selectedScore = selected == nullptr ? 0U :
+            (selected->fridayCapsuleNotifications ? 2U : 0U) +
+            (selected->fridayTransferNotifications ? 1U : 0U);
+        if (selected == nullptr || score > selectedScore) {
             selected = &connection;
         }
     }
@@ -1231,9 +1300,20 @@ void Service::Impl::syncFridayLinkState()
     if (selectedId != selectedFridayConnectionId) {
         selectedFridayConnectionId = selectedId;
         fridayTravelActive         = false;
+        fridayCapsuleActive        = false;
+        // Never replay audio queued for a disconnected/replaced Mac. The
+        // Friday app will observe the link loss and surface an honest failure.
+        if (capsuleQueue != nullptr) {
+            xQueueReset(capsuleQueue);
+        }
     }
     link.setConnected(selected != nullptr, selectedId);
     link.setTransferSubscribed(selected != nullptr && selected->fridayTransferNotifications);
+
+    auto& capsuleLink = friday::capsule::CapsuleLink::instance();
+    const bool capsuleConnected = selected != nullptr && selected->secure;
+    capsuleLink.setConnected(capsuleConnected);
+    capsuleLink.setSubscribed(capsuleConnected && selected->fridayCapsuleNotifications);
 }
 
 size_t Service::Impl::connectionCount() const
@@ -1348,7 +1428,8 @@ void Service::Impl::processWrite(const WriteEvent& write)
         return;
     }
     if (write.handle == hidHandles[detail::kHidInputCccd] || write.handle == batteryHandles[detail::kBatteryCccd] ||
-        write.handle == fridayHandles[detail::kFridayTransferCccd]) {
+        write.handle == fridayHandles[detail::kFridayTransferCccd] ||
+        write.handle == fridayHandles[detail::kFridayCapsuleDataCccd]) {
         handleCccdWrite(write);
         return;
     }
@@ -1361,6 +1442,14 @@ void Service::Impl::processWrite(const WriteEvent& write)
     }
     if (write.handle == fridayHandles[detail::kFridayTransferValue]) {
         handleFridayTransferWrite(write, *connection);
+        return;
+    }
+    if (write.handle == fridayHandles[detail::kFridayCapsuleAckValue]) {
+        if (!connection->secure) {
+            ESP_LOGW(kTag, "unencrypted capsule acknowledgement rejected id=%u", write.connId);
+            return;
+        }
+        handleFridayCapsuleAckWrite(write, *connection);
         return;
     }
     if (!connection->secure) {
@@ -1391,7 +1480,7 @@ void Service::Impl::handleCccdWrite(const WriteEvent& write)
     if (write.handle == hidHandles[detail::kHidInputCccd]) {
         connection->inputNotifications = (value & 0x0001) != 0;
         if (connection->fridayPeer) {
-            updateFridayConnectionIntervals(fridayTravelActive);
+            updateFridayConnectionIntervals(fridayTravelActive || fridayCapsuleActive);
         }
         ESP_LOGI(kTag, "input notifications id=%u enabled=%d", write.connId, connection->inputNotifications);
     } else if (write.handle == batteryHandles[detail::kBatteryCccd]) {
@@ -1402,6 +1491,12 @@ void Service::Impl::handleCccdWrite(const WriteEvent& write)
         syncFridayLinkState();
         ESP_LOGI(kTag, "Friday travel notifications id=%u enabled=%d", write.connId,
                  connection->fridayTransferNotifications);
+    } else if (write.handle == fridayHandles[detail::kFridayCapsuleDataCccd]) {
+        markFridayPeer(*connection);
+        connection->fridayCapsuleNotifications = (value & 0x0001) != 0;
+        syncFridayLinkState();
+        ESP_LOGI(kTag, "Friday capsule notifications id=%u enabled=%d", write.connId,
+                 connection->fridayCapsuleNotifications);
     }
 }
 
@@ -1426,6 +1521,18 @@ void Service::Impl::handleFridayTransferWrite(const WriteEvent& write, Connectio
         return;
     }
     esp_ble_gatts_set_attr_value(fridayHandles[detail::kFridayTransferValue], write.length,
+                                 const_cast<uint8_t*>(write.data));
+}
+
+void Service::Impl::handleFridayCapsuleAckWrite(const WriteEvent& write, Connection& connection)
+{
+    markFridayPeer(connection);
+    if (write.offset != 0 ||
+        !friday::capsule::CapsuleLink::instance().acceptAck(write.data, write.length, nowMs())) {
+        ESP_LOGW(kTag, "Friday capsule acknowledgement rejected id=%u length=%u", write.connId, write.length);
+        return;
+    }
+    esp_ble_gatts_set_attr_value(fridayHandles[detail::kFridayCapsuleAckValue], write.length,
                                  const_cast<uint8_t*>(write.data));
 }
 
@@ -1710,7 +1817,11 @@ void Service::Impl::processCommand(const Command& command)
             break;
         case CommandType::kFridayTravelMode:
             fridayTravelActive = command.fridayTravelActive;
-            updateFridayConnectionIntervals(command.fridayTravelActive);
+            updateFridayConnectionIntervals(fridayTravelActive || fridayCapsuleActive);
+            break;
+        case CommandType::kFridayCapsuleMode:
+            fridayCapsuleActive = command.fridayCapsuleActive;
+            updateFridayConnectionIntervals(fridayTravelActive || fridayCapsuleActive);
             break;
     }
 }
@@ -1736,6 +1847,23 @@ bool Service::Impl::processQueuedCommands()
         }
         didWork = true;
         processCommand(command);
+    }
+    return didWork;
+}
+
+bool Service::Impl::processCapsuleFrames()
+{
+    if (capsuleQueue == nullptr) {
+        return false;
+    }
+    bool didWork = false;
+    for (size_t count = 0; count < 4; ++count) {
+        CapsuleFrame frame{};
+        if (xQueueReceive(capsuleQueue, &frame, 0) != pdTRUE) {
+            break;
+        }
+        didWork = true;
+        sendFridayCapsuleNow(frame.data, frame.length);
     }
     return didWork;
 }
@@ -1926,6 +2054,45 @@ bool Service::Impl::sendFridayTransferNow(const uint8_t* packet, size_t length)
         }
     }
     return foundRecipient && allDelivered;
+}
+
+bool Service::Impl::sendFridayCapsuleNow(const uint8_t* packet, size_t length)
+{
+    if (packet == nullptr || length < 4 || length > FRIDAY_CAPSULE_MAX_PACKET_SIZE ||
+        packet[0] != FRIDAY_CAPSULE_PROTOCOL_VERSION || gattsIf == ESP_GATT_IF_NONE ||
+        fridayHandles[detail::kFridayCapsuleDataValue] == 0) {
+        return false;
+    }
+
+    const uint16_t session = friday_capsule_read_u16(packet + 2);
+    esp_ble_gatts_set_attr_value(fridayHandles[detail::kFridayCapsuleDataValue],
+                                 static_cast<uint16_t>(length), const_cast<uint8_t*>(packet));
+    bool foundRecipient = false;
+    bool delivered = false;
+    for (Connection& connection : connections) {
+        if (!connection.active || !connection.secure || !connection.fridayPeer ||
+            !connection.fridayCapsuleNotifications) {
+            continue;
+        }
+        foundRecipient = true;
+        if (connection.congested || connection.mtu < length + 3) {
+            continue;
+        }
+        const esp_err_t error = esp_ble_gatts_send_indicate(
+            gattsIf, connection.id, fridayHandles[detail::kFridayCapsuleDataValue],
+            static_cast<uint16_t>(length), const_cast<uint8_t*>(packet), false);
+        if (error == ESP_OK) {
+            delivered = true;
+        } else {
+            ESP_LOGW(kTag, "Friday capsule notify id=%u failed: %s", connection.id,
+                     esp_err_to_name(error));
+        }
+    }
+    if (!foundRecipient || !delivered) {
+        friday::capsule::CapsuleLink::instance().noteTransportFailure(session, nowMs());
+        return false;
+    }
+    return true;
 }
 
 void Service::Impl::updateFridayConnectionIntervals(bool active)
@@ -2243,6 +2410,16 @@ bool Service::sendFridayTransfer(const uint8_t* packet, size_t length)
 bool Service::setFridayTravelActive(bool active)
 {
     return impl_->enqueueFridayTravelMode(active);
+}
+
+bool Service::sendFridayCapsule(const uint8_t* packet, size_t length)
+{
+    return impl_->enqueueFridayCapsule(packet, length);
+}
+
+bool Service::setFridayCapsuleActive(bool active)
+{
+    return impl_->enqueueFridayCapsuleMode(active);
 }
 
 Service& GetService()

@@ -11,6 +11,7 @@ Codex f7076ff (".2") dual-ring data flow.
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -37,6 +38,14 @@ def read(root: Path, relative: str) -> str:
     path = root / relative
     try:
         return path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise SystemExit(f"cannot read {path}: {error}") from error
+
+
+def sha256(root: Path, relative: str) -> str:
+    path = root / relative
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as error:
         raise SystemExit(f"cannot read {path}: {error}") from error
 
@@ -215,12 +224,16 @@ def test_friday_gatt_and_advertising(root: Path, contract: Contract) -> None:
     friday_service = bytes.fromhex("fb349b5f800000800100594144495246")
     friday_context = bytes.fromhex("fb349b5f800000800200594144495246")
     friday_transfer = bytes.fromhex("fb349b5f800000800300594144495246")
+    friday_capsule_data = bytes.fromhex("fb349b5f800000800400594144495246")
+    friday_capsule_ack = bytes.fromhex("fb349b5f800000800500594144495246")
 
     literal_arrays = list(arrays.values())
     for name, value in (
         ("service", friday_service),
         ("context characteristic", friday_context),
         ("transfer characteristic", friday_transfer),
+        ("Flash Capsule data characteristic", friday_capsule_data),
+        ("Flash Capsule acknowledgement characteristic", friday_capsule_ack),
     ):
         contract.require(
             any(contains_subsequence(array, value) for array in literal_arrays),
@@ -231,6 +244,8 @@ def test_friday_gatt_and_advertising(root: Path, contract: Contract) -> None:
         "46524944-4159-0001-8000-00805F9B34FB",
         "46524944-4159-0002-8000-00805F9B34FB",
         "46524944-4159-0003-8000-00805F9B34FB",
+        "46524944-4159-0004-8000-00805F9B34FB",
+        "46524944-4159-0005-8000-00805F9B34FB",
     ):
         contract.require(canonical in companion, f"Friday companion lost canonical UUID {canonical}")
 
@@ -245,6 +260,9 @@ def test_friday_gatt_and_advertising(root: Path, contract: Contract) -> None:
         ("kPropertyReadWrite", "read/write context characteristic"),
         ("kPropertyWriteNotify", "write/notify transfer characteristic"),
         ("kFridayTransferCccd", "transfer notification CCCD"),
+        ("kFridayCapsuleDataCccd", "Flash Capsule notification CCCD"),
+        ("ESP_GATT_PERM_READ_ENCRYPTED", "encrypted Flash Capsule audio characteristic"),
+        ("ESP_GATT_PERM_WRITE_ENCRYPTED", "encrypted Flash Capsule acknowledgement characteristic"),
     ):
         contract.require(token in friday_db, f"Friday GATT table is missing its {description}")
 
@@ -265,6 +283,138 @@ def test_friday_gatt_and_advertising(root: Path, contract: Contract) -> None:
     contract.require(friday_service in uuid128_data, "Friday service UUID must be advertised for companion discovery")
     contract.require(bytes.fromhex("1218") in uuid16_data, "HID service UUID 0x1812 must remain advertised")
     contract.require(b"Codex Micro" in names, "the paired Codex Micro device name must remain in scan response")
+
+
+def test_flash_capsule_contract(root: Path, contract: Contract) -> None:
+    app = strip_cpp_comments(read(root, "main/apps/app_friday/app_friday.cpp"))
+    app_header = strip_cpp_comments(read(root, "main/apps/app_friday/app_friday.h"))
+    protocol = strip_cpp_comments(read(root, "main/apps/app_friday/capsule/capsule_protocol.h"))
+    codec = strip_cpp_comments(read(root, "main/apps/app_friday/capsule/capsule_codec.cpp"))
+    service = strip_cpp_comments(read(root, "main/services/codex_micro/codex_micro_service.cpp"))
+    store = strip_cpp_comments(read(root, "companion/macos/friday_capsule_store.m"))
+    inbox = strip_cpp_comments(read(root, "companion/macos/friday_capsule_inbox.m"))
+    companion_makefile = read(root, "companion/macos/Makefile")
+    companion_plist = read(root, "companion/macos/Info.plist")
+
+    input_body = function_body(app, "void AppFriday::handleInputs")
+    contract.require(bool(input_body), "Friday input handler is missing")
+    contract.require("beginCapsule(nowMs)" in input_body, "Friday A press must start a Flash Capsule")
+    contract.require(
+        "FridayCapsuleEndReleased" in input_body and "finishCapsule(reason, nowMs)" in input_body,
+        "Friday A release must end the active Flash Capsule",
+    )
+    contract.require(
+        "Reaction::ButtonA" not in input_body,
+        "Friday A must not retain its old short-press animation",
+    )
+    contract.require(
+        "Reaction::ButtonB" in input_body,
+        "Friday B interaction must remain available independently of Flash Capsule",
+    )
+    contract.require(
+        re.search(r"CapsuleMinimumMs\s*=\s*800", app_header) is not None,
+        "Flash Capsule accidental-press threshold must stay at 800 ms",
+    )
+    contract.require(
+        re.search(r"FRIDAY_CAPSULE_MAX_DURATION_MS\s*=\s*60000", protocol) is not None,
+        "Flash Capsule recording limit must stay at 60 seconds",
+    )
+    contract.require(
+        "audioRecord(_capsule_input, FRIDAY_CAPSULE_CAPTURE_CHUNK_MS, CapsuleMicGainDb)" in app,
+        "Friday must record built-in microphone audio in streaming chunks with its own gain",
+    )
+    contract.require(
+        re.search(r"CapsuleMicGainDb\s*=\s*12\.0f", app_header) is not None,
+        "Flash Capsule microphone gain must remain below the noisy 30 dB HAL default",
+    )
+    contract.require(
+        "friday_capsule_resampler_reset" in app,
+        "Flash Capsule must reset its anti-alias resampler at the start of every recording",
+    )
+    contract.require(
+        "int32_t accumulator" in codec and "int64_t accumulator" not in codec,
+        "the embedded anti-alias filter must use real-time 32-bit accumulation",
+    )
+    contract.require(
+        "friday_capsule_resample_44100_to_16000" in app and "friday_capsule_adpcm_encode" in app,
+        "Friday must resample and encode each microphone chunk before BLE streaming",
+    )
+    contract.require(
+        "_statusItem.button.title" not in inbox and "NSSquareStatusItemLength" in inbox,
+        "the Flash Capsule menu bar item must stay icon-only without an item-count badge",
+    )
+    contract.require(
+        "link.ready()" in function_body(app, "void AppFriday::beginCapsule"),
+        "Friday must refuse to record when the paired Mac capsule channel is unavailable",
+    )
+
+    worker_body = function_body(service, "void Service::Impl::worker()")
+    normal_position = worker_body.find("processQueuedCommands()")
+    capsule_position = worker_body.find("processCapsuleFrames()")
+    contract.require("capsuleQueue" in service, "Flash Capsule must use a dedicated BLE queue")
+    contract.require(
+        normal_position >= 0 and capsule_position > normal_position,
+        "Codex command/release processing must retain priority over Friday audio frames",
+    )
+    contract.require(
+        "connection.secure" in function_body(service, "bool Service::Impl::sendFridayCapsuleNow"),
+        "Flash Capsule audio notifications must require an encrypted BLE connection",
+    )
+    sync_body = function_body(service, "void Service::Impl::syncFridayLinkState")
+    contract.require(
+        "fridayCapsuleActive" in sync_body and "xQueueReset(capsuleQueue)" in sync_body,
+        "a disconnected/replaced Mac must clear Flash Capsule high-rate mode and stale audio",
+    )
+
+    for token, description in (
+        ("writeData", "incremental temporary audio writes"),
+        ("FridayCapsuleWavHeader", "recoverable temporary WAV finalization"),
+        ("NSDataWritingAtomic", "atomic daily index updates"),
+        ("SFSpeechAudioBufferRecognitionRequest", "live speech transcription"),
+        ("appendAudioPCMBuffer", "incremental PCM delivery to speech recognition"),
+        ("SFSpeechURLRecognitionRequest", "file-based recovery transcription"),
+        ("FridayCapsuleAudioRetentionSeconds", "bounded failed-transcription audio retention"),
+        ("audioRetainUntil", "per-item temporary-audio expiry"),
+        ("removeItemAtURL", "successful-transcription audio deletion"),
+        ("FridayCapsuleCategory", "todo-or-memo classification"),
+    ):
+        contract.require(token in store, f"Mac Flash Capsule store lost {description}")
+    contract.require("今日闪念胶囊" in inbox, "Mac menu-bar inbox must expose today's Flash Capsules")
+    contract.require("最多保留 24 小时" in inbox, "Mac inbox must explain bounded recovery-audio retention")
+    contract.require("expireStaleCapture" in store, "Mac must delete a stalled partial audio capture")
+    contract.require(
+        "NSSpeechRecognitionUsageDescription" in companion_plist,
+        "the signed Mac app must declare why Speech Recognition is used",
+    )
+    contract.require(
+        "codesign" in companion_makefile and "--identifier com.friday.companion" in companion_makefile,
+        "the Mac build must bind Info.plist privacy declarations into the app signature",
+    )
+    contract.require(
+        'open -n "$(APP)"' in companion_makefile,
+        "the Mac run target must launch the app bundle so TCC reads its privacy declarations",
+    )
+
+
+def test_codex_ui_source_fingerprint(root: Path, contract: Contract) -> None:
+    # Flash Capsule is a Friday feature. These hashes pin the known-good Codex
+    # .2 UI/controller baseline so an adjacent Friday change cannot silently
+    # alter Codex controls, rendering, or button behavior.
+    expected = {
+        "main/apps/app_codex_micro/app_codex_micro.cpp":
+            "03ae2673d3732cc176ed7385bb55eb2bfa54d347bf8f90402de285dabf65dd9a",
+        "main/apps/app_codex_micro/app_codex_micro.h":
+            "1b48972590b6cf5ff0dfa2d9a7e9541ea3ca3f568e87168cb998d76541ede030",
+        "main/apps/app_codex_micro/view/view.cpp":
+            "f5c54a5e2214b82803c863532418ce66562ae9385a80761747564dace97da3bd",
+        "main/apps/app_codex_micro/view/view.h":
+            "84573e04edcf84cd7445d5c19bef926dd74eaad2d0e164886d96f817e13e162d",
+    }
+    for relative, digest in expected.items():
+        contract.require(
+            sha256(root, relative) == digest,
+            f"Friday Flash Capsule must not modify protected Codex source: {relative}",
+        )
 
 
 def test_codex_has_no_legacy_chat_dashboard(root: Path, contract: Contract) -> None:
@@ -420,6 +570,8 @@ def main() -> None:
     test_launcher(root, contract)
     test_single_bluetooth_host(root, contract)
     test_friday_gatt_and_advertising(root, contract)
+    test_flash_capsule_contract(root, contract)
+    test_codex_ui_source_fingerprint(root, contract)
     test_codex_has_no_legacy_chat_dashboard(root, contract)
     test_codex_dot_two_ring_contract(root, contract)
     contract.finish()

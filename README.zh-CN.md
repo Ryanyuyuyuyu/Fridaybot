@@ -16,7 +16,7 @@ Friday 与纯 Codex 基线此前都已分别在 C152 真机上验证。本次统
 主机协议/UI 测试和完整 ESP-IDF 编译，但仍需真机验证重新配对、两个 launcher
 入口、Codex 控制、Friday 跨屏、睡眠唤醒与功耗。
 
-## 按键与触控
+## Codex App 按键与触控
 
 设备只上报控制编号；最终功能由电脑端的 Codex Micro 设置决定。建议对应关系如下：
 
@@ -36,6 +36,25 @@ A1-A6 是槽位编号；当前蓝牙数据不包含项目名或对话名，所�
 A+B 完全由 StopWatch 本地处理：它不会向 ChatGPT 发送“返回”，也不会退出 Mac
 上的 ChatGPT。BLE 服务属于整个设备进程，因此离开 Codex App 后仍会在后台保持；
 此时可以停留在 launcher 或打开其他原厂 App。
+
+## Friday 闪念胶囊
+
+闪念胶囊仍是实验原型，录音时长、清晰度与转写准确率正在真机验证；编译和启动通过
+不代表音质验收通过。
+
+在 **Friday App** 里，实体 A 键不再播放旧的短按动画，而是专用于“闪念胶囊”：
+
+- Mac 上必须运行 Friday Companion，并保持已绑定、加密的 BLE 连接；
+- 按住 A 后立即使用 StopWatch 自带麦克风录音，并以 20 ms 小块边录边传；
+- 松开 A 即结束，最长 60 秒；不足 0.8 秒按误触丢弃，不进入历史；
+- 录音时 Friday 外圈显示绿色进度，Mac 同步进行流式转写；只有最终文字与分类已原子
+  保存、临时原音已删除，才显示完整绿色成功环和表情；
+- Mac 菜单栏的“今日闪念胶囊”把待办与备忘放在同一列表中。转写失败或可信度不足时
+  显示待确认并临时保留原音，最长 24 小时后自动删除；断线、丢帧或落盘失败显示橙红色。
+
+Friday 的 B 键动画与召回功能保持不变；Friday 在 Mac 上时，B 用于召回，A 仍用于录制
+闪念胶囊。A+B 仍取消当前录音并返回 launcher。闪念胶囊不会写入 StopWatch 离线存储，
+Mac 未连接时会直接显示失败反馈。
 
 ## 蓝牙重新配对
 
@@ -88,10 +107,12 @@ idf.py build
   launcher，并把它们相邻排列。
 - Codex Micro 只包含一个 Codex Dashboard，与原厂 App 一起注册，不再包含隐藏
   的 Chat 本地预览模式。
-- 实体 A 键会在按下和松开时直接上报 `ACT10`。程序会优先判断 A+B Home 组合键，
+- 在 Codex App 中，实体 A 键会在按下和松开时直接上报 `ACT10`。程序会优先判断 A+B Home 组合键，
   因此返回 launcher 时不会遗留按住状态。
 - 两个 UI 共用唯一的 ESP-IDF Bluedroid 服务；同一份 GATT 数据库同时提供
-  Codex HID/额度与 Friday context/travel，避免启动两套互斥的 BLE Host。
+  Codex HID/额度与 Friday context/travel/闪念胶囊通道，避免启动两套互斥的 BLE Host。
+- 闪念胶囊使用独立 BLE 队列；Codex 的命令与松开事件始终先处理，且自动测试锁定
+  已验证的 Codex UI/控制源码哈希，防止 Friday 功能误改 Codex。
 - LVGL 回调只把触摸意图加入队列，由 App 主循环发送 BLE，并为每次按下配对松开。
 - A+B 沿用原厂 `KeyManager` 的 Home 手势，通过本地 App `close()` 返回 launcher。
 
