@@ -50,6 +50,10 @@ void AppCodexMicro::onOpen()
     releaseAllControls();
     _button_chord_active   = false;
     _button_chord_canceled = false;
+    _controls_armed = false;
+    _host_selection_pending = false;
+    _pending_host_id.clear();
+    _last_connection_epoch = codex_micro::GetService().snapshot().connectionEpoch;
     _key_manager           = std::make_unique<input::KeyManager>();
     _last_service_revision = UINT32_MAX;
     _last_view_update_at   = 0;
@@ -75,12 +79,13 @@ void AppCodexMicro::onRunning()
     GetHAL().updateButtonStates();
     const input::KeyEvent key_event = _key_manager ? _key_manager->update(false) : input::KeyEvent::None;
 
+    synchronizeControlRoute();
+    processTouchIntents(now);
     handlePhysicalButtons(now, key_event);
     if (currentState() != StateRunning) {
         return;
     }
 
-    processTouchIntents(now);
     updatePendingReleases(now);
     updateBattery(now);
     updateView(now);
@@ -153,12 +158,25 @@ void AppCodexMicro::handlePhysicalButtons(uint32_t now, input::KeyEvent keyEvent
         return;
     }
 
+    if (controlsBlocked()) {
+        _controls_armed = false;
+        return;
+    }
+    if (!_controls_armed) {
+        // A held button from the device menu or an old Mac must be released
+        // before a new press can control the selected Mac. Home remains above.
+        if (hal.btnA.isReleased() && hal.btnB.isReleased()) {
+            _controls_armed = true;
+        }
+        return;
+    }
+
     if (left_pressed_edge && !_left_mic_pressed) {
-        codex_micro::GetService().sendKey(kLeftMicKey, 1);
+        codex_micro::GetService().sendKey(kLeftMicKey, 1, -1, _last_connection_epoch);
         _left_mic_pressed = true;
     }
     if (left_released_edge && _left_mic_pressed) {
-        codex_micro::GetService().sendKey(kLeftMicKey, 0);
+        codex_micro::GetService().sendKey(kLeftMicKey, 0, -1, _last_connection_epoch);
         _left_mic_pressed = false;
     }
 
@@ -204,7 +222,31 @@ void AppCodexMicro::processTouchIntents(uint32_t now)
 
     codex_micro_app::view::TouchIntent intent;
     while (_view->popIntent(intent)) {
+        if ((controlsBlocked() || _button_chord_active ||
+             (GetHAL().btnA.isPressed() && GetHAL().btnB.isPressed())) &&
+            intent.type != codex_micro_app::view::TouchIntentType::DeviceMenuOpened &&
+            intent.type != codex_micro_app::view::TouchIntentType::DeviceMenuClosed &&
+            intent.type != codex_micro_app::view::TouchIntentType::SelectHost) {
+            continue;
+        }
         switch (intent.type) {
+            case codex_micro_app::view::TouchIntentType::DeviceMenuOpened:
+            case codex_micro_app::view::TouchIntentType::DeviceMenuClosed:
+                releaseAllControls();
+                _controls_armed = false;
+                break;
+            case codex_micro_app::view::TouchIntentType::SelectHost:
+                releaseAllControls();
+                _controls_armed = false;
+                if (codex_micro::GetService().selectHost(intent.hostId)) {
+                    _host_selection_pending = true;
+                    _pending_host_id = intent.hostId;
+                    _host_selection_requested_at = now;
+                } else {
+                    LvglLockGuard lock;
+                    _view->showSelectionError();
+                }
+                break;
             case codex_micro_app::view::TouchIntentType::AgentPress:
                 if (intent.agent < 0) {
                     releaseAllControls();
@@ -262,11 +304,11 @@ void AppCodexMicro::updatePendingReleases(uint32_t now)
         _send_release_at = 0;
     }
     if (_right_command_pressed && deadlineReached(now, _right_release_at)) {
-        codex_micro::GetService().sendKey(kRightCommandKey, 0);
+        codex_micro::GetService().sendKey(kRightCommandKey, 0, -1, _last_connection_epoch);
         _right_command_pressed = false;
     }
     if (_analog_pressed && deadlineReached(now, _analog_release_at)) {
-        codex_micro::GetService().sendJoystick(_analog_angle, 0.0f);
+        codex_micro::GetService().sendJoystick(_analog_angle, 0.0f, _last_connection_epoch);
         _analog_pressed = false;
     }
 }
@@ -299,16 +341,17 @@ void AppCodexMicro::updateView(uint32_t now, bool force)
 
     codex_micro_app::view::DashboardModel model;
     const bool host_live = state.connected && state.hostRpcObserved && now - state.lastHostRpcAtMs <= kHostRpcLiveForMs;
+    const std::string host_name = state.activeHostName.empty() ? "Choose Mac" : state.activeHostName;
+    model.connectionText = host_name;
+    model.transportText = state.connected ? (state.transport == codex_micro::Transport::Usb ? "USB" : "BLE") : "Offline";
     if (!state.connected) {
-        model.connectionText  = "OFFLINE";
         model.connectionColor = 0xFF7685;
     } else if (host_live) {
-        model.connectionText  = "CODEX LIVE";
         model.connectionColor = 0x77E6A5;
     } else {
-        model.connectionText  = "BLE LINK";
         model.connectionColor = 0xF0C978;
     }
+    model.hosts = state.hosts;
 
     char battery_text[20] = {};
     std::snprintf(battery_text, sizeof(battery_text), "BAT %u%%%s", static_cast<unsigned>(_battery_level),
@@ -348,7 +391,8 @@ void AppCodexMicro::sendAgentKey(int index, bool pressed)
         return;
     }
 
-    codex_micro::GetService().sendKey(kAgentKeys[index], pressed ? 1 : 0, static_cast<int8_t>(index));
+    codex_micro::GetService().sendKey(kAgentKeys[index], pressed ? 1 : 0, static_cast<int8_t>(index),
+                                     _last_connection_epoch);
     _agent_pressed[index] = pressed;
 }
 
@@ -357,7 +401,7 @@ void AppCodexMicro::sendSendKey(bool pressed)
     if (_send_pressed == pressed) {
         return;
     }
-    codex_micro::GetService().sendKey(kSendKey, pressed ? 1 : 0);
+    codex_micro::GetService().sendKey(kSendKey, pressed ? 1 : 0, -1, _last_connection_epoch);
     _send_pressed = pressed;
 }
 
@@ -386,10 +430,10 @@ void AppCodexMicro::beginSendPulse(uint32_t now)
 void AppCodexMicro::beginRightCommandPulse(uint32_t now)
 {
     if (_right_command_pressed) {
-        codex_micro::GetService().sendKey(kRightCommandKey, 0);
+        codex_micro::GetService().sendKey(kRightCommandKey, 0, -1, _last_connection_epoch);
     }
     mclog::tagInfo(getAppInfo().name, "physical B: ACT09 command");
-    codex_micro::GetService().sendKey(kRightCommandKey, 1);
+    codex_micro::GetService().sendKey(kRightCommandKey, 1, -1, _last_connection_epoch);
     _right_command_pressed = true;
     _right_release_at      = now + KeyPulseDurationMs;
 }
@@ -397,10 +441,10 @@ void AppCodexMicro::beginRightCommandPulse(uint32_t now)
 void AppCodexMicro::beginAnalogPulse(float angle, uint32_t now)
 {
     if (_analog_pressed) {
-        codex_micro::GetService().sendJoystick(_analog_angle, 0.0f);
+        codex_micro::GetService().sendJoystick(_analog_angle, 0.0f, _last_connection_epoch);
     }
     _analog_angle = angle;
-    codex_micro::GetService().sendJoystick(_analog_angle, 1.0f);
+    codex_micro::GetService().sendJoystick(_analog_angle, 1.0f, _last_connection_epoch);
     _analog_pressed    = true;
     _analog_release_at = now + KeyPulseDurationMs;
 }
@@ -408,31 +452,49 @@ void AppCodexMicro::beginAnalogPulse(float angle, uint32_t now)
 void AppCodexMicro::releaseAllControls()
 {
     auto& service = codex_micro::GetService();
+    if (_last_connection_epoch != UINT32_MAX && service.snapshot().connectionEpoch != _last_connection_epoch) {
+        clearControlState();
+        return;
+    }
     for (size_t i = 0; i < _agent_pressed.size(); ++i) {
         if (_agent_pressed[i]) {
-            service.sendKey(kAgentKeys[i], 0, static_cast<int8_t>(i));
+            service.sendKey(kAgentKeys[i], 0, static_cast<int8_t>(i), _last_connection_epoch);
             _agent_pressed[i] = false;
         }
         _agent_release_at[i] = 0;
     }
     if (_send_pressed) {
-        service.sendKey(kSendKey, 0);
+        service.sendKey(kSendKey, 0, -1, _last_connection_epoch);
         _send_pressed = false;
     }
     if (_left_mic_pressed) {
-        service.sendKey(kLeftMicKey, 0);
+        service.sendKey(kLeftMicKey, 0, -1, _last_connection_epoch);
         _left_mic_pressed = false;
     }
     if (_right_command_pressed) {
-        service.sendKey(kRightCommandKey, 0);
+        service.sendKey(kRightCommandKey, 0, -1, _last_connection_epoch);
         _right_command_pressed = false;
     }
     _right_press_observed = false;
     _right_press_at       = 0;
     if (_analog_pressed) {
-        service.sendJoystick(_analog_angle, 0.0f);
+        service.sendJoystick(_analog_angle, 0.0f, _last_connection_epoch);
         _analog_pressed = false;
     }
+    clearControlState();
+}
+
+void AppCodexMicro::clearControlState()
+{
+    _agent_pressed.fill(false);
+    _agent_release_at.fill(0);
+    _send_pressed          = false;
+    _left_mic_pressed      = false;
+    _right_press_observed  = false;
+    _right_command_pressed = false;
+    _analog_pressed        = false;
+    _analog_angle          = 0.0f;
+    _right_press_at        = 0;
     _right_release_at       = 0;
     _send_release_at        = 0;
     _analog_release_at      = 0;
@@ -440,4 +502,41 @@ void AppCodexMicro::releaseAllControls()
     _touch_send_candidate   = false;
     _touch_gesture_consumed = false;
     GetHAL().stopVibrate();
+}
+
+bool AppCodexMicro::controlsBlocked() const
+{
+    return _host_selection_pending || (_view && _view->deviceMenuOpen());
+}
+
+void AppCodexMicro::synchronizeControlRoute()
+{
+    const auto state = codex_micro::GetService().snapshot();
+    if (state.connectionEpoch != _last_connection_epoch) {
+        // The service releases the old endpoint when it changes routes. Only
+        // forget local state here; emitting releases now would target new Mac.
+        clearControlState();
+        _controls_armed = false;
+        _last_connection_epoch = state.connectionEpoch;
+        _last_service_revision = UINT32_MAX;
+        if (_view) {
+            LvglLockGuard lock;
+            _view->cancelTouch();
+        }
+    }
+    if (_host_selection_pending && state.preferredHostId == _pending_host_id) {
+        _host_selection_pending = false;
+        _pending_host_id.clear();
+        if (_view) {
+            LvglLockGuard lock;
+            _view->closeDeviceMenu();
+        }
+    } else if (_host_selection_pending && GetHAL().millis() - _host_selection_requested_at >= 2000) {
+        _host_selection_pending = false;
+        _pending_host_id.clear();
+        if (_view) {
+            LvglLockGuard lock;
+            _view->showSelectionError();
+        }
+    }
 }

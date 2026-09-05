@@ -38,6 +38,7 @@ idf_component_register(
         espressif__esp-dsp
         espressif__esp_codec_dev
         espressif__i2c_bus
+        espressif__esp_tinyusb
         driver
         esp_driver_gpio
         esp_driver_i2c
@@ -55,3 +56,11 @@ idf_component_register(
     EMBED_TXTFILES
         "hal/utils/config_ap/assets/badge_config_ap.html"
 )
+
+if(CONFIG_CODEX_MICRO_USB_HID)
+    # TinyUSB uses the HID endpoint scratch buffer for control SET_REPORT too.
+    # The largest feature report is 256 bytes plus its Report ID; the interrupt
+    # endpoint descriptors still advertise the full-speed limit of 64 bytes.
+    idf_component_get_property(CODEX_TINYUSB_LIB espressif__tinyusb COMPONENT_LIB)
+    target_compile_definitions(${CODEX_TINYUSB_LIB} PUBLIC CFG_TUD_HID_EP_BUFSIZE=257)
+endif()

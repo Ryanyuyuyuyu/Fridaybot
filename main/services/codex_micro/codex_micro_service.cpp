@@ -7,6 +7,8 @@
 #include "apps/app_friday/capsule/capsule_protocol.h"
 #include "apps/app_friday/context_link.h"
 #include "services/codex_micro/codex_micro_gatt_db.h"
+#include "services/codex_micro/usb_transport.h"
+#include "services/codex_micro/ble_sessions.h"
 
 #include <ArduinoJson.h>
 
@@ -14,6 +16,8 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cctype>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -37,6 +41,7 @@ namespace codex_micro {
 namespace {
 
 constexpr char kTag[]                    = "codex_micro";
+constexpr uint16_t kUsbConnectionId = 0xFFFE;
 constexpr uint16_t kGattAppId            = 0x0C0D;
 constexpr size_t kMaxConnections         = 8;
 constexpr size_t kMaxHandlesPerService   = detail::kHidCount;
@@ -83,6 +88,7 @@ enum class ControlEventType : uint8_t {
 };
 
 struct ControlEvent {
+    uint32_t linkGeneration;
     ControlEventType type;
     esp_gatt_if_t gattsIf;
     esp_gatt_status_t gattStatus;
@@ -97,6 +103,7 @@ struct ControlEvent {
 };
 
 struct WriteEvent {
+    uint32_t linkGeneration;
     esp_gatt_if_t gattsIf;
     uint16_t connId;
     uint16_t handle;
@@ -110,6 +117,7 @@ struct WriteEvent {
 
 enum class CommandType : uint8_t {
     kBattery,
+    kSelectHost,
     kKey,
     kJoystick,
     kFridayTransfer,
@@ -125,6 +133,8 @@ struct CapsuleFrame {
 struct Command {
     CommandType type;
     uint32_t sequence;
+    uint32_t controlEpoch;
+    char hostId[97];
     uint8_t percentage;
     bool charging;
     uint8_t action;
@@ -138,6 +148,17 @@ struct Command {
 };
 
 struct Connection {
+    uint32_t linkGeneration = 0;
+    bool usb                         = false;
+    bool rpcReady                    = false;
+    uint32_t lastRpcAtMs              = 0;
+    std::string hostId;
+    std::string hostName;
+    bool legacyIdentity              = true;
+    bool identityConfirmed            = false;
+    std::array<Thread, 6> threads{};
+    Quota quota{};
+    RateLimitUsage rateLimits{};
     bool active                      = false;
     uint16_t id                      = 0;
     uint8_t address[ESP_BD_ADDR_LEN] = {};
@@ -151,6 +172,13 @@ struct Connection {
     bool fridayCapsuleNotifications  = false;
     uint32_t rpcLastFragmentAtMs     = 0;
     std::string rpcBuffer;
+    bool rpcDiscardUntilNewline = false;
+};
+
+struct HostBinding {
+    std::array<uint8_t, ESP_BD_ADDR_LEN> address{};
+    std::string id;
+    std::string name;
 };
 
 struct HeldKey {
@@ -185,10 +213,20 @@ struct Service::Impl {
     Impl() = default;
 
     bool begin();
+    bool enqueueSelectHost(const std::string& hostId);
+    bool processUsb();
+    void acceptHostIdentity(Connection& connection, const uint8_t* bytes, size_t length);
+    void registerHost(Connection& connection);
+    void refreshRouting();
+    void publishTelemetry();
+    bool releaseOldRoute(int32_t endpoint);
+    void loadHosts();
+    void saveHosts();
+    void applyBinding(Connection& connection);
     State snapshot() const;
     void enqueueBattery(uint8_t percentage, bool charging);
-    void enqueueKey(const char* key, uint8_t action, int8_t agent);
-    void enqueueJoystick(float angle, float distance);
+    void enqueueKey(const char* key, uint8_t action, int8_t agent, uint32_t expectedEpoch);
+    void enqueueJoystick(float angle, float distance, uint32_t expectedEpoch);
     bool enqueueFridayTransfer(const uint8_t* packet, size_t length);
     bool enqueueFridayTravelMode(bool active);
     bool enqueueFridayCapsule(const uint8_t* packet, size_t length);
@@ -229,7 +267,7 @@ struct Service::Impl {
     void handleRegistration(const ControlEvent& event);
     void handleTableCreated(const ControlEvent& event);
     void handleServiceStarted(const ControlEvent& event);
-    void handleConnection(bool connected, uint16_t connId, const uint8_t* address);
+    void handleConnection(bool connected, uint16_t connId, const uint8_t* address, uint32_t generation);
     void handleMtu(uint16_t connId, uint16_t mtu);
     void handleCongestion(uint16_t connId, bool congested);
     void handleCccdWrite(const WriteEvent& write);
@@ -241,7 +279,7 @@ struct Service::Impl {
 
     bool handleRpc(const JsonDocument& request, uint16_t connectionId);
     void noteHostRpc(uint16_t connectionId);
-    void updateThreads(JsonArrayConst values);
+    void updateThreads(JsonArrayConst values, uint16_t connectionId);
     void sendMethodNotFound(JsonVariantConst id, uint16_t connectionId);
     void sendSuccess(JsonVariantConst id, uint16_t connectionId);
     bool sendJson(const std::string& json, int32_t targetConnection = -1);
@@ -256,7 +294,6 @@ struct Service::Impl {
     void rememberKeyState(const char* key, uint8_t action, int8_t agent);
 
     Connection* findConnection(uint16_t connectionId);
-    const Connection* findConnection(uint16_t connectionId) const;
     size_t connectionCount() const;
     void clearHostRpcLocked();
     void clearRpcAssembly(Connection& connection);
@@ -285,6 +322,18 @@ struct Service::Impl {
     TaskHandle_t workerTask              = nullptr;
 
     State state{};
+    HostSelection hostSelection;
+    std::vector<HostBinding> hostBindings;
+    std::string savedHosts;
+    std::atomic<uint32_t> controlEpoch{1};
+    BleSessions callbackSessions;
+    portMUX_TYPE callbackSessionMux = portMUX_INITIALIZER_UNLOCKED;
+    int32_t routedConnection = -1;
+    std::string routedHostId;
+    Connection usbConnection{};
+    uint32_t usbEpoch = 0;
+    uint32_t usbReconnectAtMs = 0;
+    std::string usbResumePreference;
     std::array<Connection, kMaxConnections> connections{};
     esp_gatt_if_t gattsIf                          = ESP_GATT_IF_NONE;
     uint16_t deviceInfoHandles[detail::kDiCount]   = {};
@@ -442,12 +491,13 @@ void Service::Impl::enqueueBattery(uint8_t percentage, bool isCharging)
     }
 }
 
-void Service::Impl::enqueueKey(const char* key, uint8_t action, int8_t agent)
+void Service::Impl::enqueueKey(const char* key, uint8_t action, int8_t agent, uint32_t expectedEpoch)
 {
     if (!started.load(std::memory_order_acquire) || commandQueue == nullptr || releaseQueue == nullptr) {
         return;
     }
     Command command{};
+    command.controlEpoch = expectedEpoch == UINT32_MAX ? controlEpoch.load(std::memory_order_acquire) : expectedEpoch;
     command.type     = CommandType::kKey;
     command.sequence = nextCommandSequence.fetch_add(1, std::memory_order_relaxed);
     command.action   = action;
@@ -466,12 +516,13 @@ void Service::Impl::enqueueKey(const char* key, uint8_t action, int8_t agent)
     }
 }
 
-void Service::Impl::enqueueJoystick(float angle, float distance)
+void Service::Impl::enqueueJoystick(float angle, float distance, uint32_t expectedEpoch)
 {
     if (!started.load(std::memory_order_acquire) || commandQueue == nullptr || releaseQueue == nullptr) {
         return;
     }
     Command command{};
+    command.controlEpoch = expectedEpoch == UINT32_MAX ? controlEpoch.load(std::memory_order_acquire) : expectedEpoch;
     command.type         = CommandType::kJoystick;
     command.sequence     = nextCommandSequence.fetch_add(1, std::memory_order_relaxed);
     command.angle        = angle;
@@ -555,6 +606,344 @@ bool Service::Impl::enqueueFridayCapsuleMode(bool active)
     return true;
 }
 
+bool Service::Impl::enqueueSelectHost(const std::string& hostId)
+{
+    if (!started.load() || hostId.empty() || hostId.size() > 96) return false;
+    Command command{};
+    command.type = CommandType::kSelectHost;
+    command.sequence = nextCommandSequence.fetch_add(1);
+    std::memcpy(command.hostId, hostId.c_str(), hostId.size() + 1);
+    return xQueueSend(commandQueue, &command, 0) == pdTRUE;
+}
+
+void Service::Impl::applyBinding(Connection& connection)
+{
+    for (const auto& binding : hostBindings) {
+        if (addressEquals(binding.address.data(), connection.address)) {
+            connection.hostId = binding.id;
+            connection.hostName = binding.name;
+            connection.legacyIdentity = false;
+            return;
+        }
+    }
+    char alias[32];
+    std::snprintf(alias, sizeof(alias), "ble-%02x%02x%02x%02x%02x%02x", connection.address[0],
+                  connection.address[1], connection.address[2], connection.address[3], connection.address[4],
+                  connection.address[5]);
+    connection.hostId = alias;
+    char label[32];
+    std::snprintf(label, sizeof(label), "Mac %02X%02X", connection.address[4], connection.address[5]);
+    connection.hostName = label;
+    connection.legacyIdentity = true;
+}
+
+void Service::Impl::acceptHostIdentity(Connection& connection, const uint8_t* bytes, size_t length)
+{
+    if (bytes == nullptr || length == 0 || length > 128) return;
+    // Feature reports are NUL padded; BLE writes contain exactly the JSON.
+    const void* end = std::memchr(bytes, 0, length);
+    if (end) length = static_cast<const uint8_t*>(end) - bytes;
+    JsonDocument doc;
+    if (deserializeJson(doc, bytes, length) || !doc.is<JsonObjectConst>() ||
+        !doc["version"].is<unsigned>() || doc["version"].as<unsigned>() != 1 ||
+        !doc["hostId"].is<const char*>() || !doc["name"].is<const char*>()) return;
+    std::string id = doc["hostId"].as<const char*>();
+    std::string name = doc["name"].as<const char*>();
+    if (id.size() != 36 || name.empty() || name.size() > 64) return;
+    for (size_t i = 0; i < id.size(); ++i) {
+        const bool hyphen = i == 8 || i == 13 || i == 18 || i == 23;
+        if (hyphen ? id[i] != '-' : !std::isxdigit(static_cast<unsigned char>(id[i]))) return;
+        id[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(id[i])));
+    }
+    if (std::any_of(name.begin(), name.end(), [](unsigned char c) { return c < 32 || c == 127; })) return;
+    // A live physical transport cannot change identity mid-session. Renames are fine.
+    if (connection.identityConfirmed && connection.hostId != id) return;
+    if (!connection.usb) {
+        char alias[32];
+        std::snprintf(alias, sizeof(alias), "ble-%02x%02x%02x%02x%02x%02x", connection.address[0],
+                      connection.address[1], connection.address[2], connection.address[3], connection.address[4], connection.address[5]);
+        hostSelection.migrateIdentity(alias, id, name);
+    }
+    connection.identityConfirmed = true;
+    connection.hostId = id;
+    connection.hostName = name;
+    connection.legacyIdentity = false;
+    hostSelection.rememberHost(id, name);
+    if (!connection.usb) {
+        auto binding = std::find_if(hostBindings.begin(), hostBindings.end(), [&connection](const HostBinding& item) {
+            return addressEquals(item.address.data(), connection.address);
+        });
+        if (binding == hostBindings.end()) {
+            if (hostBindings.size() == 16) hostBindings.erase(hostBindings.begin());
+            hostBindings.push_back(HostBinding{});
+            binding = hostBindings.end() - 1;
+            std::memcpy(binding->address.data(), connection.address, ESP_BD_ADDR_LEN);
+        }
+        binding->id = id;
+        binding->name = name;
+        // CoreBluetooth and the OS HID client can use separate logical links.
+        for (auto& peer : connections) {
+            if (peer.active && addressEquals(peer.address, connection.address)) {
+                peer.identityConfirmed = true;
+                peer.hostId = id;
+                peer.hostName = name;
+                peer.legacyIdentity = false;
+                registerHost(peer);
+            }
+        }
+    } else {
+        registerHost(connection);
+    }
+    refreshRouting();
+}
+
+void Service::Impl::registerHost(Connection& connection)
+{
+    if (!connection.active || !connection.secure || !connection.inputNotifications || !connection.rpcReady ||
+        connection.hostId.empty()) return;
+    const bool accepted = hostSelection.registerReady(connection.id, connection.usb ? Transport::Usb : Transport::Ble,
+                                                      connection.hostId, connection.hostName, connection.legacyIdentity);
+    if (accepted && connection.usb && !usbResumePreference.empty()) {
+        hostSelection.selectHost(usbResumePreference);
+        usbResumePreference.clear();
+    }
+}
+
+bool Service::Impl::releaseOldRoute(int32_t endpoint)
+{
+    if (endpoint < 0 || findConnection(static_cast<uint16_t>(endpoint)) == nullptr) return true;
+    bool delivered = true;
+    for (const auto& held : heldKeys) {
+        if (!held.active) continue;
+        JsonDocument message;
+        message["method"] = "v.oai.hid";
+        auto params = message["params"].to<JsonObject>();
+        params["k"] = held.key;
+        params["act"] = 0;
+        if (held.agent >= 0) params["ag"] = held.agent;
+        std::string json;
+        serializeJson(message, json);
+        delivered = sendJson(json, endpoint) && delivered;
+    }
+    if (joystickHeld) {
+        JsonDocument message;
+        message["method"] = "v.oai.rad";
+        auto params = message["params"].to<JsonObject>();
+        params["a"] = heldJoystickAngle;
+        params["d"] = 0;
+        std::string json;
+        serializeJson(message, json);
+        delivered = sendJson(json, endpoint) && delivered;
+    }
+    return delivered;
+}
+
+void Service::Impl::refreshRouting()
+{
+    const auto selection = hostSelection.selectedRoute();
+    const int32_t next = selection ? selection->endpoint : -1;
+    const std::string nextHost = hostSelection.selectedHostId();
+    if (next != routedConnection || nextHost != routedHostId) {
+        // Drain releases to the OLD destination before changing the route. If
+        // it cannot receive them, terminate that session rather than carrying
+        // any held state into another Mac.
+        if (!releaseOldRoute(routedConnection)) {
+            if (routedConnection == kUsbConnectionId) {
+                usb::disconnect();
+                usbReconnectAtMs = nowMs() + 150;
+            } else if (routedConnection >= 0 && gattsIf != ESP_GATT_IF_NONE) {
+                esp_ble_gatts_close(gattsIf, static_cast<uint16_t>(routedConnection));
+            }
+        }
+        controlEpoch.fetch_add(1, std::memory_order_acq_rel);
+        heldKeys.fill(HeldKey{});
+        pendingReleases.fill(PendingRelease{});
+        joystickHeld = false;
+        heldJoystickAngle = 0;
+        routedConnection = next;
+        routedHostId = nextHost;
+        xSemaphoreTake(stateMutex, portMAX_DELAY);
+        state.threads = {};
+        state.quota = {};
+        state.rateLimits = {};
+        clearHostRpcLocked();
+        state.connectionEpoch = controlEpoch.load();
+        xSemaphoreGive(stateMutex);
+    }
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    state.hosts = hostSelection.hosts();
+    state.activeHostId = nextHost;
+    state.activeHostName = hostSelection.selectedName();
+    state.preferredHostId = hostSelection.preferredHostId();
+    state.transport = selection ? selection->transport : Transport::Ble;
+    state.connected = next >= 0;
+    state.usbMounted = usbConnection.active;
+    ++state.revision;
+    xSemaphoreGive(stateMutex);
+    publishTelemetry();
+    saveHosts();
+}
+
+void Service::Impl::publishTelemetry()
+{
+    const Connection* selected = routedConnection >= 0 ? findConnection(static_cast<uint16_t>(routedConnection)) : nullptr;
+    if (!selected) return;
+    const Connection* quota = selected;
+    // Legacy quota writers use a separate GATT connection. Associate it with
+    // the selected Mac, never with whichever Mac wrote most recently globally.
+    for (const auto& peer : connections) {
+        if (selected->usb && selected->quota.available && nowMs() - selected->quota.receivedAtMs < 120000) break;
+        if (peer.active && peer.secure && peer.hostId == selected->hostId && peer.quota.available &&
+            (!quota->quota.available || static_cast<int32_t>(peer.quota.receivedAtMs - quota->quota.receivedAtMs) > 0)) {
+            quota = &peer;
+        }
+    }
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    state.threads = selected->threads;
+    state.quota = quota->quota;
+    state.rateLimits = quota->rateLimits;
+    state.hostRpcObserved = selected->rpcReady;
+    state.lastHostRpcAtMs = selected->lastRpcAtMs;
+    hostRpcConnectionValid = selected->rpcReady;
+    hostRpcConnectionId = selected->id;
+    ++state.revision;
+    xSemaphoreGive(stateMutex);
+}
+
+bool Service::Impl::processUsb()
+{
+    bool worked = false;
+    if (usbReconnectAtMs && static_cast<int32_t>(nowMs() - usbReconnectAtMs) >= 0) {
+        usbReconnectAtMs = 0;
+        usb::connect();
+    }
+    usb::Event event{};
+    for (size_t count = 0; count < 16 && usb::poll(event); ++count) {
+        worked = true;
+        if (event.type == usb::EventType::Mounted) {
+            if (event.epoch != usb::sessionEpoch() || !usb::mounted()) continue;
+            usbResumePreference = event.resumed ? hostSelection.preferredHostId() : std::string{};
+            usbConnection = Connection{};
+            hostSelection.disconnect(kUsbConnectionId);
+            refreshRouting();
+            usbEpoch = event.epoch;
+            usbConnection.usb = usbConnection.active = usbConnection.secure = usbConnection.inputNotifications = true;
+            usbConnection.id = kUsbConnectionId;
+            usbConnection.mtu = 517;
+            refreshRouting();
+        } else if (event.type == usb::EventType::Unmounted) {
+            if (event.epoch != usb::sessionEpoch() || usb::mounted()) continue;
+            usbConnection = Connection{};
+            hostSelection.disconnect(kUsbConnectionId);
+            refreshRouting();
+        } else if (event.epoch == usbEpoch && usbConnection.active) {
+            if (event.type == usb::EventType::Overflow) {
+                clearRpcAssembly(usbConnection);
+                usbConnection.rpcDiscardUntilNewline = true;
+            } else if (event.type == usb::EventType::HostIdentity) {
+                acceptHostIdentity(usbConnection, event.data, event.length);
+            } else if (event.type == usb::EventType::Quota) {
+                if (usbConnection.hostId.empty()) continue;
+                WriteEvent report{};
+                report.connId = kUsbConnectionId;
+                report.length = std::min(event.length, sizeof(report.data));
+                const void* terminator = std::memchr(event.data, 0, report.length);
+                if (terminator) report.length = static_cast<const uint8_t*>(terminator) - event.data;
+                std::memcpy(report.data, event.data, report.length);
+                handleQuotaWrite(report);
+            } else if (event.type == usb::EventType::OutputReport) {
+                WriteEvent report{};
+                report.connId = kUsbConnectionId;
+                report.length = std::min(event.length, sizeof(report.data));
+                std::memcpy(report.data, event.data, report.length);
+                handleOutputReport(report);
+            }
+        }
+    }
+    // A full callback queue must not keep a removed device selected.
+    if (usbConnection.active && (!usb::mounted() || usbEpoch != usb::sessionEpoch())) {
+        usbConnection = Connection{};
+        hostSelection.disconnect(kUsbConnectionId);
+        refreshRouting();
+    }
+    if (!usbConnection.active && usb::mounted()) {
+        usbEpoch = usb::sessionEpoch();
+        usbConnection = Connection{};
+        usbConnection.usb = usbConnection.active = usbConnection.secure = usbConnection.inputNotifications = true;
+        usbConnection.id = kUsbConnectionId;
+        usbConnection.mtu = 517;
+        refreshRouting();
+    }
+    return worked;
+}
+
+void Service::Impl::loadHosts()
+{
+    nvs_handle_t handle;
+    if (nvs_open(kNvsNamespace, NVS_READONLY, &handle) != ESP_OK) return;
+    size_t length = 0;
+    if (nvs_get_str(handle, "hosts-v1", nullptr, &length) == ESP_OK && length > 1 && length <= 8192) {
+        std::string data(length, '\0');
+        if (nvs_get_str(handle, "hosts-v1", data.data(), &length) == ESP_OK) {
+            JsonDocument doc;
+            if (!deserializeJson(doc, data.c_str())) {
+                for (JsonObjectConst host : doc["hosts"].as<JsonArrayConst>()) {
+                    hostSelection.rememberHost(host["id"] | "", host["name"] | "");
+                }
+                hostSelection.restorePreferredHost(doc["preferred"] | "");
+                for (JsonObjectConst entry : doc["bindings"].as<JsonArrayConst>()) {
+                    if (hostBindings.size() >= 16) break;
+                    JsonArrayConst address = entry["address"].as<JsonArrayConst>();
+                    if (address.size() != ESP_BD_ADDR_LEN) continue;
+                    HostBinding binding;
+                    bool valid = true;
+                    for (size_t i = 0; i < binding.address.size(); ++i) {
+                        if (!address[i].is<uint8_t>()) valid = false;
+                        binding.address[i] = address[i].as<uint8_t>();
+                    }
+                    binding.id = entry["id"] | "";
+                    binding.name = entry["name"] | "";
+                    if (valid && binding.id.size() == 36 && binding.name.size() <= 64) hostBindings.push_back(binding);
+                }
+                savedHosts = data.c_str();
+            }
+        }
+    }
+    nvs_close(handle);
+    refreshRouting();
+}
+
+void Service::Impl::saveHosts()
+{
+    JsonDocument doc;
+    doc["preferred"] = hostSelection.preferredHostId();
+    auto hosts = doc["hosts"].to<JsonArray>();
+    for (const auto& host : hostSelection.hosts()) {
+        auto entry = hosts.add<JsonObject>();
+        entry["id"] = host.id;
+        entry["name"] = host.name;
+    }
+    auto bindings = doc["bindings"].to<JsonArray>();
+    for (const auto& binding : hostBindings) {
+        auto entry = bindings.add<JsonObject>();
+        entry["id"] = binding.id;
+        entry["name"] = binding.name;
+        auto address = entry["address"].to<JsonArray>();
+        for (uint8_t byte : binding.address) address.add(byte);
+    }
+    std::string serialized;
+    serializeJson(doc, serialized);
+    if (serialized == savedHosts) return;
+    nvs_handle_t handle;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) return;
+    if (nvs_set_str(handle, "hosts-v1", serialized.c_str()) == ESP_OK && nvs_commit(handle) == ESP_OK) {
+        savedHosts = serialized;
+    } else {
+        ESP_LOGW(kTag, "host preference save failed");
+    }
+    nvs_close(handle);
+}
+
 void Service::Impl::workerEntry(void* context)
 {
     static_cast<Impl*>(context)->worker();
@@ -562,6 +951,8 @@ void Service::Impl::workerEntry(void* context)
 
 void Service::Impl::worker()
 {
+    loadHosts();
+    usb::begin();
     while (!initializeBluetooth()) {
         // Initialization is asynchronous from begin(). Keep the worker alive
         // and retry partial controller/host setup instead of leaving a
@@ -574,7 +965,7 @@ void Service::Impl::worker()
 
     ESP_LOGI(kTag, "BLE worker running");
     while (true) {
-        bool didWork = false;
+        bool didWork = processUsb();
         ControlEvent control{};
         for (size_t count = 0; count < kControlQueueDepth && xQueueReceive(controlQueue, &control, 0) == pdTRUE;
              ++count) {
@@ -973,7 +1364,17 @@ void Service::Impl::gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_par
 
 void Service::Impl::enqueueControl(const ControlEvent& event)
 {
-    if (controlQueue == nullptr || xQueueSend(controlQueue, &event, 0) != pdTRUE) {
+    ControlEvent queued = event;
+    portENTER_CRITICAL(&callbackSessionMux);
+    if (event.type == ControlEventType::kConnected) {
+        queued.linkGeneration = callbackSessions.connect(event.connId, event.address);
+    } else if (event.type == ControlEventType::kDisconnected) {
+        queued.linkGeneration = callbackSessions.disconnect(event.connId, event.address);
+    } else {
+        queued.linkGeneration = callbackSessions.token(event.connId);
+    }
+    portEXIT_CRITICAL(&callbackSessionMux);
+    if (controlQueue == nullptr || xQueueSend(controlQueue, &queued, 0) != pdTRUE) {
         controlQueueLost.store(true, std::memory_order_release);
     }
 }
@@ -985,6 +1386,9 @@ void Service::Impl::enqueueWrite(esp_gatt_if_t callbackIf, const esp_ble_gatts_c
         return;
     }
     WriteEvent queued{};
+    portENTER_CRITICAL(&callbackSessionMux);
+    queued.linkGeneration = callbackSessions.token(write.conn_id, write.bda);
+    portEXIT_CRITICAL(&callbackSessionMux);
     queued.gattsIf      = callbackIf;
     queued.connId       = write.conn_id;
     queued.handle       = write.handle;
@@ -1012,10 +1416,10 @@ void Service::Impl::processControlEvent(const ControlEvent& event)
             handleServiceStarted(event);
             break;
         case ControlEventType::kConnected:
-            handleConnection(true, event.connId, event.address);
+            handleConnection(true, event.connId, event.address, event.linkGeneration);
             break;
         case ControlEventType::kDisconnected:
-            handleConnection(false, event.connId, event.address);
+            handleConnection(false, event.connId, event.address, event.linkGeneration);
             break;
         case ControlEventType::kMtuChanged:
             handleMtu(event.connId, event.value);
@@ -1250,17 +1654,8 @@ bool Service::Impl::processAdvertisingRetry()
 
 Connection* Service::Impl::findConnection(uint16_t connectionId)
 {
+    if (connectionId == kUsbConnectionId) return usbConnection.active ? &usbConnection : nullptr;
     for (Connection& connection : connections) {
-        if (connection.active && connection.id == connectionId) {
-            return &connection;
-        }
-    }
-    return nullptr;
-}
-
-const Connection* Service::Impl::findConnection(uint16_t connectionId) const
-{
-    for (const Connection& connection : connections) {
         if (connection.active && connection.id == connectionId) {
             return &connection;
         }
@@ -1322,81 +1717,47 @@ size_t Service::Impl::connectionCount() const
                                              [](const Connection& connection) { return connection.active; }));
 }
 
-void Service::Impl::handleConnection(bool connected, uint16_t connectionId, const uint8_t* address)
+void Service::Impl::handleConnection(bool connected, uint16_t connectionId, const uint8_t* address, uint32_t generation)
 {
-    const size_t before = connectionCount();
+    if (connectionId == kUsbConnectionId || address == nullptr || generation == 0) return;
+    Connection* connection = findConnection(connectionId);
     if (connected) {
-        // Legacy connectable advertising stops when a connection is accepted.
-        advertisingActive      = false;
-        Connection* connection = findConnection(connectionId);
-        if (connection == nullptr) {
+        advertisingActive = false;
+        if (connection && connection->linkGeneration == generation && addressEquals(connection->address, address)) return;
+        if (connection) {
+            *connection = Connection{};
+            hostSelection.disconnect(connectionId);
+            refreshRouting();
+        } else {
             const auto empty = std::find_if(connections.begin(), connections.end(),
-                                            [](const Connection& item) { return !item.active; });
+                                           [](const Connection& item) { return !item.active; });
             if (empty == connections.end()) {
-                ESP_LOGE(kTag, "connection table full; id=%u", connectionId);
-                handleCallbackQueueLoss(true, false);
+                esp_ble_gatts_close(gattsIf, connectionId);
                 return;
             }
-            connection         = &*empty;
-            *connection        = Connection{};
-            connection->active = true;
-            connection->id     = connectionId;
-            std::memcpy(connection->address, address, ESP_BD_ADDR_LEN);
+            connection = &*empty;
         }
-
-        const size_t after = connectionCount();
-        xSemaphoreTake(stateMutex, portMAX_DELAY);
-        if (before == 0 && after > 0) {
-            ++state.connectionEpoch;
-            clearHostRpcLocked();
-        }
-        state.connected = after > 0;
-        ++state.revision;
-        const uint32_t epoch = state.connectionEpoch;
-        xSemaphoreGive(stateMutex);
-
+        *connection = Connection{};
+        connection->active = true;
+        connection->id = connectionId;
+        connection->linkGeneration = generation;
+        std::memcpy(connection->address, address, ESP_BD_ADDR_LEN);
+        applyBinding(*connection);
         esp_ble_set_encryption(connection->address, ESP_BLE_SEC_ENCRYPT_NO_MITM);
+        refreshRouting();
         startAdvertising();
-        ESP_LOGI(kTag, "host connected id=%u count=%u epoch=%lu", connectionId, static_cast<unsigned>(after),
-                 static_cast<unsigned long>(epoch));
+        ESP_LOGI(kTag, "BLE link connected id=%u count=%u", connectionId, static_cast<unsigned>(connectionCount()));
         return;
     }
-
-    Connection* connection = findConnection(connectionId);
-    if (connection == nullptr) {
-        ESP_LOGW(kTag, "disconnect for unknown id=%u", connectionId);
-        startAdvertising();
-        return;
-    }
-    if (address != nullptr && !addressEquals(connection->address, address)) {
-        ESP_LOGW(kTag, "disconnect address mismatch id=%u", connectionId);
-    }
-    *connection        = Connection{};
-    const size_t after = connectionCount();
-    const bool remainingInputSubscriber =
-        std::any_of(connections.begin(), connections.end(),
-                    [](const Connection& item) { return item.active && item.secure && item.inputNotifications; });
-
-    const bool lostHost = hostRpcConnectionValid && hostRpcConnectionId == connectionId;
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    state.connected = after > 0;
-    if (after == 0 || lostHost) {
-        clearHostRpcLocked();
-    }
-    ++state.revision;
-    const uint32_t epoch = state.connectionEpoch;
-    xSemaphoreGive(stateMutex);
-
-    if (after == 0 || !remainingInputSubscriber) {
-        heldKeys.fill(HeldKey{});
-        pendingReleases.fill(PendingRelease{});
-        joystickHeld      = false;
-        heldJoystickAngle = 0.0f;
-    }
+    if (!connection || connection->linkGeneration != generation || !addressEquals(connection->address, address)) return;
+    // Mark unavailable before routing changes: never release a held key to a
+    // new peer that later reuses this connection ID.
+    *connection = Connection{};
+    hostSelection.disconnect(connectionId);
+    refreshRouting();
     syncFridayLinkState();
     startAdvertising();
-    ESP_LOGI(kTag, "host disconnected id=%u count=%u epoch=%lu", connectionId, static_cast<unsigned>(after),
-             static_cast<unsigned long>(epoch));
+    ESP_LOGI(kTag, "BLE link disconnected id=%u count=%u", connectionId, static_cast<unsigned>(connectionCount()));
 }
 
 void Service::Impl::handleMtu(uint16_t connectionId, uint16_t mtu)
@@ -1423,7 +1784,8 @@ void Service::Impl::processWrite(const WriteEvent& write)
         return;
     }
     Connection* connection = findConnection(write.connId);
-    if (connection == nullptr || !addressEquals(connection->address, write.address)) {
+    if (connection == nullptr || write.linkGeneration == 0 || connection->linkGeneration != write.linkGeneration ||
+        !addressEquals(connection->address, write.address)) {
         ESP_LOGW(kTag, "stale write rejected id=%u handle=%u", write.connId, write.handle);
         return;
     }
@@ -1456,6 +1818,10 @@ void Service::Impl::processWrite(const WriteEvent& write)
         ESP_LOGW(kTag, "unencrypted write rejected id=%u handle=%u", write.connId, write.handle);
         return;
     }
+    if (write.handle == quotaHandles[detail::kHostIdentityValue]) {
+        if (write.offset == 0) acceptHostIdentity(*connection, write.data, write.length);
+        return;
+    }
     if (write.handle == hidHandles[detail::kHidOutputValue]) {
         handleOutputReport(write);
         return;
@@ -1479,6 +1845,9 @@ void Service::Impl::handleCccdWrite(const WriteEvent& write)
         static_cast<uint16_t>(write.data[0]) | static_cast<uint16_t>(static_cast<uint16_t>(write.data[1]) << 8);
     if (write.handle == hidHandles[detail::kHidInputCccd]) {
         connection->inputNotifications = (value & 0x0001) != 0;
+        if (!connection->inputNotifications) hostSelection.disconnect(connection->id);
+        registerHost(*connection);
+        refreshRouting();
         if (connection->fridayPeer) {
             updateFridayConnectionIntervals(fridayTravelActive || fridayCapsuleActive);
         }
@@ -1557,6 +1926,10 @@ void Service::Impl::handleOutputReport(const WriteEvent& write)
         return;
     }
     const char* payload = reinterpret_cast<const char*>(write.data + offset + 2);
+    if (connection->rpcDiscardUntilNewline) {
+        if (std::memchr(payload, '\n', payloadLength)) connection->rpcDiscardUntilNewline = false;
+        return;
+    }
 
     constexpr char kTopLevelPrefix[] = "{\"method\"";
     const bool startsTopLevel        = payloadLength >= sizeof(kTopLevelPrefix) - 1 &&
@@ -1623,7 +1996,7 @@ bool Service::Impl::handleRpc(const JsonDocument& request, uint16_t connectionId
         result["battery"]       = batteryPercentage;
         result["is_charging"]   = charging;
     } else if (std::strcmp(method, "v.oai.thstatus") == 0 && params.is<JsonArrayConst>()) {
-        updateThreads(params.as<JsonArrayConst>());
+        updateThreads(params.as<JsonArrayConst>(), connectionId);
         JsonObject result = response["result"].to<JsonObject>();
         result["ok"]      = true;
     } else if (std::strcmp(method, "v.oai.rgbcfg") == 0 && params.is<JsonObjectConst>()) {
@@ -1639,8 +2012,7 @@ bool Service::Impl::handleRpc(const JsonDocument& request, uint16_t connectionId
 
     std::string json;
     serializeJson(response, json);
-    sendJson(json, connectionId);
-    return true;
+    return sendJson(json, connectionId);
 }
 
 void Service::Impl::sendMethodNotFound(JsonVariantConst id, uint16_t connectionId)
@@ -1666,15 +2038,16 @@ void Service::Impl::sendSuccess(JsonVariantConst id, uint16_t connectionId)
     sendJson(json, connectionId);
 }
 
-void Service::Impl::updateThreads(JsonArrayConst values)
+void Service::Impl::updateThreads(JsonArrayConst values, uint16_t connectionId)
 {
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    Connection* connection = findConnection(connectionId);
+    if (connection == nullptr) return;
     for (JsonObjectConst value : values) {
         const int id = value["id"] | -1;
-        if (id < 0 || id >= static_cast<int>(state.threads.size())) {
+        if (id < 0 || id >= static_cast<int>(connection->threads.size())) {
             continue;
         }
-        Thread& thread = state.threads[static_cast<size_t>(id)];
+        Thread& thread = connection->threads[static_cast<size_t>(id)];
         if (value["c"].is<uint32_t>()) {
             thread.color = value["c"].as<uint32_t>() & 0x00FFFFFFU;
         }
@@ -1701,29 +2074,24 @@ void Service::Impl::updateThreads(JsonArrayConst values)
             }
         }
     }
-    ++state.revision;
-    xSemaphoreGive(stateMutex);
+    publishTelemetry();
 }
 
 void Service::Impl::noteHostRpc(uint16_t connectionId)
 {
-    const Connection* connection = findConnection(connectionId);
-    if (connection == nullptr || !connection->secure) {
-        return;
-    }
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    if (state.connected) {
-        state.hostRpcObserved  = true;
-        state.lastHostRpcAtMs  = nowMs();
-        hostRpcConnectionId    = connectionId;
-        hostRpcConnectionValid = true;
-        ++state.revision;
-    }
-    xSemaphoreGive(stateMutex);
+    Connection* connection = findConnection(connectionId);
+    if (connection == nullptr || !connection->secure) return;
+    connection->rpcReady = true;
+    connection->lastRpcAtMs = nowMs();
+    registerHost(*connection);
+    refreshRouting();
+    publishTelemetry();
 }
 
 void Service::Impl::handleQuotaWrite(const WriteEvent& write)
 {
+    Connection* connection = findConnection(write.connId);
+    if (connection == nullptr) return;
     if (write.length == 0 || write.length > detail::kMaxQuotaSize) {
         return;
     }
@@ -1764,18 +2132,16 @@ void Service::Impl::handleQuotaWrite(const WriteEvent& write)
 
     const uint32_t receivedAt = nowMs();
 
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    state.quota.remainingPercent         = percentage;
-    state.quota.resetInSeconds           = reset.as<uint32_t>();
-    state.quota.receivedAtMs             = receivedAt;
-    state.quota.available                = true;
-    state.rateLimits.fiveHourUsedPercent = fiveHourAvailable ? fiveHourUsed.as<float>() : 0.0f;
-    state.rateLimits.weeklyUsedPercent   = weeklyAvailable ? weeklyUsed.as<float>() : 0.0f;
-    state.rateLimits.receivedAtMs        = receivedAt;
-    state.rateLimits.fiveHourAvailable   = fiveHourAvailable;
-    state.rateLimits.weeklyAvailable     = weeklyAvailable;
-    ++state.revision;
-    xSemaphoreGive(stateMutex);
+    connection->quota.remainingPercent         = percentage;
+    connection->quota.resetInSeconds           = reset.as<uint32_t>();
+    connection->quota.receivedAtMs             = receivedAt;
+    connection->quota.available                = true;
+    connection->rateLimits.fiveHourUsedPercent = fiveHourAvailable ? fiveHourUsed.as<float>() : 0.0f;
+    connection->rateLimits.weeklyUsedPercent   = weeklyAvailable ? weeklyUsed.as<float>() : 0.0f;
+    connection->rateLimits.receivedAtMs        = receivedAt;
+    connection->rateLimits.fiveHourAvailable   = fiveHourAvailable;
+    connection->rateLimits.weeklyAvailable     = weeklyAvailable;
+    publishTelemetry();
     ESP_LOGI(kTag, "quota remaining=%.1f reset=%lus", percentage, static_cast<unsigned long>(reset.as<uint32_t>()));
     if (fiveHourAvailable || weeklyAvailable) {
         ESP_LOGI(kTag, "rate-limit fields five_hour=%d weekly=%d", fiveHourAvailable, weeklyAvailable);
@@ -1784,7 +2150,14 @@ void Service::Impl::handleQuotaWrite(const WriteEvent& write)
 
 void Service::Impl::processCommand(const Command& command)
 {
+    if ((command.type == CommandType::kKey || command.type == CommandType::kJoystick) &&
+        command.controlEpoch != controlEpoch.load(std::memory_order_acquire)) return;
     switch (command.type) {
+        case CommandType::kSelectHost:
+            if (!usbResumePreference.empty()) usbResumePreference = command.hostId;
+            hostSelection.selectHost(command.hostId);
+            refreshRouting();
+            break;
         case CommandType::kBattery:
             setBatteryNow(command.percentage, command.charging);
             break;
@@ -1793,7 +2166,9 @@ void Service::Impl::processCommand(const Command& command)
                 if (sendKeyNow(command.key, command.action, command.agent)) {
                     cancelOlderPendingRelease(command);
                 }
-            } else if (!sendKeyNow(command.key, command.action, command.agent)) {
+            } else if (std::any_of(heldKeys.begin(), heldKeys.end(), [&command](const HeldKey& held) {
+                return held.active && held.agent == command.agent && std::strcmp(held.key, command.key) == 0;
+            }) && !sendKeyNow(command.key, command.action, command.agent)) {
                 const bool stillHeld = std::any_of(heldKeys.begin(), heldKeys.end(), [&command](const HeldKey& item) {
                     return item.active && item.agent == command.agent &&
                            std::strncmp(item.key, command.key, sizeof(item.key)) == 0;
@@ -1808,7 +2183,7 @@ void Service::Impl::processCommand(const Command& command)
                 if (sendJoystickNow(command.angle, command.distance)) {
                     cancelOlderPendingRelease(command);
                 }
-            } else if (!sendJoystickNow(command.angle, command.distance) && joystickHeld) {
+            } else if (joystickHeld && !sendJoystickNow(command.angle, command.distance)) {
                 schedulePendingRelease(command);
             }
             break;
@@ -1930,6 +2305,10 @@ void Service::Impl::schedulePendingRelease(const Command& command)
                                     [](const PendingRelease& pending) { return !pending.active; });
     if (empty == pendingReleases.end()) {
         ESP_LOGE(kTag, "pending release table full; closing HID connections");
+        if (routedConnection == kUsbConnectionId) {
+            usb::disconnect();
+            usbReconnectAtMs = nowMs() + 150;
+        }
         for (const Connection& connection : connections) {
             if (connection.active && connection.secure && connection.inputNotifications &&
                 gattsIf != ESP_GATT_IF_NONE) {
@@ -1995,9 +2374,7 @@ bool Service::Impl::sendKeyNow(const char* key, uint8_t action, int8_t agent)
     std::string json;
     serializeJson(message, json);
     const bool delivered     = sendJson(json);
-    const bool hasSubscriber = std::any_of(connections.begin(), connections.end(), [](const Connection& connection) {
-        return connection.active && connection.secure && connection.inputNotifications;
-    });
+    const bool hasSubscriber = routedConnection >= 0;
     if (delivered || (action != 0 && hasSubscriber)) {
         rememberKeyState(key, action, agent);
     }
@@ -2015,9 +2392,7 @@ bool Service::Impl::sendJoystickNow(float angle, float distance)
     std::string json;
     serializeJson(message, json);
     const bool delivered     = sendJson(json);
-    const bool hasSubscriber = std::any_of(connections.begin(), connections.end(), [](const Connection& connection) {
-        return connection.active && connection.secure && connection.inputNotifications;
-    });
+    const bool hasSubscriber = routedConnection >= 0;
     if (delivered || (distance > 0.0f && hasSubscriber)) {
         joystickHeld      = distance > 0.0f;
         heldJoystickAngle = angle;
@@ -2156,24 +2531,11 @@ void Service::Impl::rememberKeyState(const char* key, uint8_t action, int8_t age
 
 bool Service::Impl::sendJson(const std::string& json, int32_t targetConnection)
 {
-    if (gattsIf == ESP_GATT_IF_NONE || hidHandles[detail::kHidInputValue] == 0 || connectionCount() == 0) {
-        return false;
-    }
-    std::string framed = json;
-    framed.push_back('\n');
-    bool foundTarget  = false;
-    bool allDelivered = true;
-    for (Connection& connection : connections) {
-        if (!connection.active || !connection.secure || !connection.inputNotifications ||
-            (targetConnection >= 0 && connection.id != static_cast<uint16_t>(targetConnection))) {
-            continue;
-        }
-        foundTarget = true;
-        if (!sendJsonToConnection(framed, connection)) {
-            allDelivered = false;
-        }
-    }
-    return foundTarget && allDelivered;
+    const int32_t endpoint = targetConnection >= 0 ? targetConnection : routedConnection;
+    if (endpoint < 0) return false;
+    Connection* connection = findConnection(static_cast<uint16_t>(endpoint));
+    if (connection == nullptr) return false;
+    return sendJsonToConnection(json + "\n", *connection);
 }
 
 bool Service::Impl::sendJsonToConnection(const std::string& framed, Connection& connection)
@@ -2202,6 +2564,11 @@ bool Service::Impl::sendJsonToConnection(const std::string& framed, Connection& 
 
 bool Service::Impl::sendReport(const uint8_t* report, Connection& connection)
 {
+    if (connection.usb) return usb::sendReport(report, detail::kReportBodySize, usbEpoch);
+    portENTER_CRITICAL(&callbackSessionMux);
+    const uint32_t generation = callbackSessions.token(connection.id, connection.address);
+    portEXIT_CRITICAL(&callbackSessionMux);
+    if (generation == 0 || generation != connection.linkGeneration) return false;
     esp_ble_gatts_set_attr_value(hidHandles[detail::kHidInputValue], detail::kReportBodySize, report);
     const esp_err_t error = esp_ble_gatts_send_indicate(gattsIf, connection.id, hidHandles[detail::kHidInputValue],
                                                         detail::kReportBodySize, const_cast<uint8_t*>(report), false);
@@ -2218,7 +2585,10 @@ void Service::Impl::handleCallbackQueueLoss(bool controlLost, bool writeLost)
         // A missing fragment invalidates only the current RPC assembly. Quota
         // writes are independent snapshots, so dropping one leaves the last
         // valid snapshot intact.
-        clearAllRpcAssemblies();
+        for (auto& peer : connections) {
+            clearRpcAssembly(peer);
+            peer.rpcDiscardUntilNewline = true;
+        }
         ESP_LOGE(kTag, "BLE write callback queue overflow; RPC resynchronized");
     }
     if (!controlLost) {
@@ -2232,17 +2602,15 @@ void Service::Impl::handleCallbackQueueLoss(bool controlLost, bool writeLost)
         if (connection.active && gattsIf != ESP_GATT_IF_NONE) {
             esp_ble_gatts_close(gattsIf, connection.id);
         }
+        hostSelection.disconnect(connection.id);
         connection = Connection{};
     }
+    refreshRouting();
     syncFridayLinkState();
-    heldKeys.fill(HeldKey{});
-    pendingReleases.fill(PendingRelease{});
-    joystickHeld      = false;
-    heldJoystickAngle = 0.0f;
-    clearAllRpcAssemblies();
+    for (auto& peer : connections) clearRpcAssembly(peer);
     xSemaphoreTake(stateMutex, portMAX_DELAY);
-    state.connected = false;
-    clearHostRpcLocked();
+    state.connected = routedConnection >= 0;
+    if (routedConnection < 0) clearHostRpcLocked();
     ++state.revision;
     xSemaphoreGive(stateMutex);
     advertisingDataPending = false;
@@ -2298,6 +2666,7 @@ void Service::Impl::clearRpcAssembly(Connection& connection)
 
 void Service::Impl::clearAllRpcAssemblies()
 {
+    clearRpcAssembly(usbConnection);
     for (Connection& connection : connections) {
         clearRpcAssembly(connection);
     }
@@ -2392,14 +2761,19 @@ void Service::setBattery(uint8_t percentage, bool charging)
     impl_->enqueueBattery(percentage, charging);
 }
 
-void Service::sendKey(const char* key, uint8_t action, int8_t agent)
+void Service::sendKey(const char* key, uint8_t action, int8_t agent, uint32_t expectedEpoch)
 {
-    impl_->enqueueKey(key, action, agent);
+    impl_->enqueueKey(key, action, agent, expectedEpoch);
 }
 
-void Service::sendJoystick(float angle, float distance)
+void Service::sendJoystick(float angle, float distance, uint32_t expectedEpoch)
 {
-    impl_->enqueueJoystick(angle, distance);
+    impl_->enqueueJoystick(angle, distance, expectedEpoch);
+}
+
+bool Service::selectHost(const std::string& hostId)
+{
+    return impl_->enqueueSelectHost(hostId);
 }
 
 bool Service::sendFridayTransfer(const uint8_t* packet, size_t length)

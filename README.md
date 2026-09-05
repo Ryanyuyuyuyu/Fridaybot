@@ -1,5 +1,12 @@
 # Friday + Codex Micro for M5Stack StopWatch
 
+Codex host switching is implemented in `V0.5-friday-codex.6`: one active Mac,
+a device picker, optional USB priority, and same-Mac Bluetooth fallback. See
+[host switching and verification](docs/codex-host-switching.md),
+[USB build configuration](docs/codex-usb-transport.md), and the
+[Mac identity/usage helper](companion/macos/host_identity/README.md).
+The new behavior has build/offline evidence; two-Mac physical validation is pending.
+
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face
 while preserving the upstream hardware evaluation apps.

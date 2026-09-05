@@ -45,6 +45,25 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.5.4
+  espressif/esp_tinyusb:
+    component_hash: a8558cc89dae68552cb7a20123ffcb8db81a8a25bd560bc4d5b2f60a12bd6afb
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    - name: espressif/tinyusb
+      registry_url: https://components.espressif.com
+      require: public
+      version: '>=0.17.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    version: 2.0.1
   espressif/i2c_bus:
     component_hash: 4e990dc11734316186b489b362c61d41f23f79d58bc169795cec215e528cba14
     dependencies:
@@ -59,6 +78,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.5.0
+  espressif/tinyusb:
+    component_hash: a72b7d67472914ab76309340fd50d578b31e310963d45ad0f81144bde3314752
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - esp32s31
+    version: 0.21.0~1
   idf:
     source:
       type: idf
@@ -68,8 +103,9 @@ direct_dependencies:
 - espressif/cmake_utilities
 - espressif/esp-dsp
 - espressif/esp_codec_dev
+- espressif/esp_tinyusb
 - espressif/i2c_bus
 - idf
-manifest_hash: c617373befe8b1fa75c13efe199c02fb007e1c544872d4ec5ecea62d8b7d7b93
+manifest_hash: d75258953161af5c135f7e176d7a56ca87386a0dad722d4f45f6e6f102b8c716
 target: esp32s3
 version: 2.0.0

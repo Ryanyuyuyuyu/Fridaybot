@@ -1,0 +1,13 @@
+menu "Codex Micro"
+
+config CODEX_MICRO_USB_HID
+    bool "Enable Codex Micro USB HID transport"
+    default n
+    depends on IDF_TARGET_ESP32S3
+    help
+        Use the native USB OTG port for Codex RPC. The internal USB PHY can
+        no longer serve USB Serial/JTAG while this app runs. Build with the
+        dedicated sdkconfig.usb.defaults fragment and verify physical download
+        mode recovery before deploying this image.
+
+endmenu

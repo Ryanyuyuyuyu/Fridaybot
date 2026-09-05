@@ -397,23 +397,23 @@ def test_flash_capsule_contract(root: Path, contract: Contract) -> None:
 
 
 def test_codex_ui_source_fingerprint(root: Path, contract: Contract) -> None:
-    # Flash Capsule is a Friday feature. These hashes pin the known-good Codex
-    # .2 UI/controller baseline so an adjacent Friday change cannot silently
-    # alter Codex controls, rendering, or button behavior.
+    # User-authorized Codex host switching updates the UI/controller baseline.
+    # Keep a fingerprint boundary for later, unrelated Friday changes. Native
+    # LVGL QA and host-selection tests validate the new behavior independently.
     expected = {
         "main/apps/app_codex_micro/app_codex_micro.cpp":
-            "03ae2673d3732cc176ed7385bb55eb2bfa54d347bf8f90402de285dabf65dd9a",
+            "ebdf57576ab57da583546e26d40f777ff4e6bc15a0948fd82109b2748bfb53b6",
         "main/apps/app_codex_micro/app_codex_micro.h":
-            "1b48972590b6cf5ff0dfa2d9a7e9541ea3ca3f568e87168cb998d76541ede030",
+            "d28e3cf1caa41d73627f264c0ac15a0a456937a09d022b5567cf9f57643cec1f",
         "main/apps/app_codex_micro/view/view.cpp":
-            "f5c54a5e2214b82803c863532418ce66562ae9385a80761747564dace97da3bd",
+            "2484d4bef43dbcb19e31e8e6c30b29f8fb5c791b4eee19bdb80656d073158926",
         "main/apps/app_codex_micro/view/view.h":
-            "84573e04edcf84cd7445d5c19bef926dd74eaad2d0e164886d96f817e13e162d",
+            "1581019f3ee02b3ef5d52717248ebfcf1ae6636a05fa914c9c7489c061767e06",
     }
     for relative, digest in expected.items():
         contract.require(
             sha256(root, relative) == digest,
-            f"Friday Flash Capsule must not modify protected Codex source: {relative}",
+            f"Unrelated changes must not modify the verified Codex host-picker baseline: {relative}",
         )
 
 
@@ -476,12 +476,12 @@ def test_codex_has_no_legacy_chat_dashboard(root: Path, contract: Contract) -> N
     contract.require(bool(button_body), "Codex physical-button handler is missing")
     press_guard = re.search(r"if\s*\(\s*left_pressed_edge\s*&&\s*!_left_mic_pressed\s*\)", button_body)
     release_guard = re.search(r"if\s*\(\s*left_released_edge\s*&&\s*_left_mic_pressed\s*\)", button_body)
-    press_report = re.search(r"sendKey\s*\(\s*kLeftMicKey\s*,\s*1\s*\)", button_body)
-    release_report = re.search(r"sendKey\s*\(\s*kLeftMicKey\s*,\s*0\s*\)", button_body)
+    press_report = re.search(r"sendKey\s*\(\s*kLeftMicKey\s*,\s*1\s*,\s*-1\s*,\s*_last_connection_epoch\s*\)", button_body)
+    release_report = re.search(r"sendKey\s*\(\s*kLeftMicKey\s*,\s*0\s*,\s*-1\s*,\s*_last_connection_epoch\s*\)", button_body)
     contract.require(press_guard is not None and press_report is not None, "physical A must press ACT10 directly")
     contract.require(release_guard is not None and release_report is not None, "physical A must release ACT10 directly")
     chord_position = button_body.find("beginButtonChord()")
-    press_position = button_body.find("sendKey(kLeftMicKey, 1)")
+    press_position = press_report.start() if press_report is not None else -1
     contract.require(
         chord_position >= 0 and press_position >= 0 and chord_position < press_position,
         "A+B Home chord must be evaluated before physical A can emit ACT10",

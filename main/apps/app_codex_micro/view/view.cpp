@@ -53,7 +53,7 @@ struct Point {
 };
 
 constexpr std::array<Point, 6> kAgentCenters = {
-    Point{233, 72}, Point{375, 154}, Point{375, 318}, Point{233, 400}, Point{91, 318}, Point{91, 154},
+    Point{233, 94}, Point{375, 154}, Point{375, 318}, Point{233, 400}, Point{91, 318}, Point{91, 154},
 };
 
 uint8_t colorChannel(uint32_t color, int shift)
@@ -586,8 +586,9 @@ bool DashboardView::init(lv_obj_t* parent)
     for (size_t i = 0; i < _agent_buttons.size(); ++i) {
         auto* button      = lv_button_create(_root);
         _agent_buttons[i] = button;
-        lv_obj_set_size(button, 112, 112);
-        lv_obj_set_pos(button, kAgentCenters[i].x - 56, kAgentCenters[i].y - 56);
+        const int32_t diameter = i == 0 ? 80 : 112;
+        lv_obj_set_size(button, diameter, diameter);
+        lv_obj_set_pos(button, kAgentCenters[i].x - diameter / 2, kAgentCenters[i].y - diameter / 2);
         lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, LV_PART_MAIN);
         lv_obj_set_style_bg_color(button, lv_color_hex(kPanelColor), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_PART_MAIN);
@@ -612,7 +613,7 @@ bool DashboardView::init(lv_obj_t* parent)
         auto* label      = lv_label_create(button);
         _agent_labels[i] = label;
         makeTransparentLabel(label, &lv_font_montserrat_22, kPrimaryText);
-        lv_obj_set_size(label, 92, lv_font_get_line_height(&lv_font_montserrat_22));
+        lv_obj_set_size(label, diameter - 20, lv_font_get_line_height(&lv_font_montserrat_22));
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
         char agent_name[4] = {};
@@ -621,15 +622,36 @@ bool DashboardView::init(lv_obj_t* parent)
         lv_obj_center(label);
     }
 
-    _connection_label = lv_label_create(_root);
-    makeTransparentLabel(_connection_label, &lv_font_montserrat_16, kSecondaryText);
-    lv_label_set_text(_connection_label, "OFFLINE");
-    lv_obj_align(_connection_label, LV_ALIGN_TOP_LEFT, 18, 12);
+    _connection_button = lv_button_create(_root);
+    lv_obj_set_size(_connection_button, 216, 32);
+    lv_obj_set_pos(_connection_button, 125, 22);
+    lv_obj_set_style_radius(_connection_button, 16, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_connection_button, lv_color_hex(kPanelColor), LV_PART_MAIN);
+    lv_obj_set_style_border_width(_connection_button, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(_connection_button, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(_connection_button, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(_connection_button, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(_connection_button, handleDeviceMenuEvent, LV_EVENT_CLICKED, this);
+    _connection_label = lv_label_create(_connection_button);
+    makeTransparentLabel(_connection_label, &lv_font_montserrat_14, kSecondaryText);
+    lv_obj_set_width(_connection_label, 120);
+    lv_label_set_long_mode(_connection_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_text_align(_connection_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_label_set_text(_connection_label, "Choose Mac");
+    lv_obj_align(_connection_label, LV_ALIGN_LEFT_MID, 14, 0);
+    auto* connection_divider = makeDecorativeObject(_connection_button, 1, 14, kTrackColor);
+    lv_obj_set_pos(connection_divider, 142, 9);
+    _transport_label = lv_label_create(_connection_button);
+    makeTransparentLabel(_transport_label, &lv_font_montserrat_14, kSecondaryText);
+    lv_obj_set_width(_transport_label, 58);
+    lv_obj_set_style_text_align(_transport_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_label_set_text(_transport_label, "Offline");
+    lv_obj_align(_transport_label, LV_ALIGN_RIGHT_MID, -8, 0);
 
     _battery_label = lv_label_create(_root);
-    makeTransparentLabel(_battery_label, &lv_font_montserrat_16, kSecondaryText);
+    makeTransparentLabel(_battery_label, &lv_font_montserrat_10, kSecondaryText);
     lv_label_set_text(_battery_label, "BAT --%");
-    lv_obj_align(_battery_label, LV_ALIGN_TOP_RIGHT, -18, 12);
+    lv_obj_set_pos(_battery_label, 303, 78);
 
     return true;
 }
@@ -647,7 +669,21 @@ void DashboardView::update(const DashboardModel& model)
 
     lv_label_set_text(_connection_label, model.connectionText.c_str());
     lv_obj_set_style_text_color(_connection_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
+    lv_label_set_text(_transport_label, model.transportText.c_str());
+    lv_obj_set_style_text_color(_transport_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
     lv_label_set_text(_battery_label, model.batteryText.c_str());
+
+    const auto same_host = [](const codex_micro::HostInfo& left, const codex_micro::HostInfo& right) {
+        return left.id == right.id && left.name == right.name && left.online == right.online &&
+               left.selected == right.selected && left.usbAvailable == right.usbAvailable &&
+               left.bleAvailable == right.bleAvailable;
+    };
+    if (_hosts.size() != model.hosts.size() || !std::equal(_hosts.begin(), _hosts.end(), model.hosts.begin(), same_host)) {
+        _hosts = model.hosts;
+        if (deviceMenuOpen()) {
+            rebuildDeviceRows();
+        }
+    }
 
     updateLimitIndicator(_five_hour_limit, model.fiveHourUsedPercent, model.fiveHourLimitAvailable, 520, 0);
     updateLimitIndicator(_weekly_limit, model.weeklyUsedPercent, model.weeklyLimitAvailable, 620, 70);
@@ -698,7 +734,7 @@ void DashboardView::handleTouchEvent(lv_event_t* event)
     }
 
     auto* binding = static_cast<TouchBinding*>(lv_event_get_user_data(event));
-    if (binding == nullptr || binding->owner == nullptr) {
+    if (binding == nullptr || binding->owner == nullptr || binding->owner->deviceMenuOpen()) {
         return;
     }
 
@@ -738,7 +774,7 @@ void DashboardView::handleCircleHitTest(lv_event_t* event)
     const int32_t center_y = (coordinates.y1 + coordinates.y2 + 1) / 2;
     const int32_t delta_x  = info->point->x - center_x;
     const int32_t delta_y  = info->point->y - center_y;
-    const int32_t radius   = binding->isSend ? 104 : 60;
+    const int32_t radius   = binding->isSend ? 104 : (binding->agent == 0 ? 44 : 60);
     info->res              = delta_x * delta_x + delta_y * delta_y <= radius * radius;
 }
 
@@ -746,7 +782,7 @@ void DashboardView::handleGestureEvent(lv_event_t* event)
 {
     auto* owner = static_cast<DashboardView*>(lv_event_get_user_data(event));
     auto* indev = lv_indev_active();
-    if (owner == nullptr || indev == nullptr) {
+    if (owner == nullptr || indev == nullptr || owner->deviceMenuOpen()) {
         return;
     }
     TouchIntent intent;
@@ -768,6 +804,186 @@ void DashboardView::handleGestureEvent(lv_event_t* event)
             return;
     }
     owner->enqueueIntent(intent);
+}
+
+void DashboardView::cancelTouch()
+{
+    // Reset before draining because LVGL may issue PRESS_LOST during reset.
+    for (auto* indev = lv_indev_get_next(nullptr); indev != nullptr; indev = lv_indev_get_next(indev)) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
+            lv_indev_reset(indev, nullptr);
+            lv_indev_wait_release(indev);
+        }
+    }
+    if (_intent_queue != nullptr) {
+        xQueueReset(_intent_queue);
+    }
+    lv_anim_delete(this, applySendPulseAnimationValue);
+    restoreSendPulseVisuals();
+}
+
+void DashboardView::handleDeviceMenuEvent(lv_event_t* event)
+{
+    auto* owner = static_cast<DashboardView*>(lv_event_get_user_data(event));
+    if (owner == nullptr) {
+        return;
+    }
+    if (owner->deviceMenuOpen()) {
+        owner->closeDeviceMenu();
+        TouchIntent intent;
+        intent.type = TouchIntentType::DeviceMenuClosed;
+        owner->enqueueIntent(intent);
+    } else {
+        owner->openDeviceMenu();
+    }
+}
+
+void DashboardView::openDeviceMenu()
+{
+    _device_menu_open.store(true);
+    cancelTouch();
+    if (_device_overlay == nullptr) {
+        _device_overlay = lv_obj_create(_root);
+        lv_obj_remove_style_all(_device_overlay);
+        lv_obj_set_size(_device_overlay, 466, 466);
+        lv_obj_set_style_bg_color(_device_overlay, lv_color_hex(kBackgroundColor), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(_device_overlay, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_add_flag(_device_overlay, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(_device_overlay, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(_device_overlay, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+        auto* title = lv_label_create(_device_overlay);
+        makeTransparentLabel(title, &lv_font_montserrat_22, kPrimaryText);
+        lv_label_set_text(title, "Devices");
+        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 46);
+
+        _device_menu_message = lv_label_create(_device_overlay);
+        makeTransparentLabel(_device_menu_message, &lv_font_montserrat_14, kSecondaryText);
+        lv_obj_set_width(_device_menu_message, 290);
+        lv_obj_set_style_text_align(_device_menu_message, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_align(_device_menu_message, LV_ALIGN_TOP_MID, 0, 79);
+
+        _device_list = lv_obj_create(_device_overlay);
+        lv_obj_remove_style_all(_device_list);
+        lv_obj_set_size(_device_list, 306, 234);
+        lv_obj_set_pos(_device_list, 80, 112);
+        lv_obj_set_style_pad_all(_device_list, 4, LV_PART_MAIN);
+        lv_obj_set_style_pad_row(_device_list, 8, LV_PART_MAIN);
+        lv_obj_set_flex_flow(_device_list, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_scroll_dir(_device_list, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(_device_list, LV_SCROLLBAR_MODE_AUTO);
+        lv_obj_set_style_bg_color(_device_list, lv_color_hex(kTrackColor), LV_PART_SCROLLBAR);
+        lv_obj_set_style_bg_opa(_device_list, LV_OPA_COVER, LV_PART_SCROLLBAR);
+        lv_obj_clear_flag(_device_list, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+        auto* close = lv_button_create(_device_overlay);
+        lv_obj_set_size(close, 140, 48);
+        lv_obj_set_pos(close, 163, 363);
+        lv_obj_set_style_radius(close, 24, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(close, lv_color_hex(kPanelColor), LV_PART_MAIN);
+        lv_obj_set_style_border_color(close, lv_color_hex(kTrackColor), LV_PART_MAIN);
+        lv_obj_set_style_border_width(close, 1, LV_PART_MAIN);
+        lv_obj_clear_flag(close, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(close, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        lv_obj_add_event_cb(close, handleDeviceMenuEvent, LV_EVENT_CLICKED, this);
+        auto* close_label = lv_label_create(close);
+        makeTransparentLabel(close_label, &lv_font_montserrat_16, kPrimaryText);
+        lv_label_set_text(close_label, "Close");
+        lv_obj_center(close_label);
+
+        auto* home = lv_label_create(_device_overlay);
+        makeTransparentLabel(home, &lv_font_montserrat_10, kSecondaryText);
+        lv_label_set_text(home, "HOLD A+B FOR HOME");
+        lv_obj_align(home, LV_ALIGN_TOP_MID, 0, 425);
+    }
+    lv_obj_clear_flag(_device_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(_device_overlay);
+    lv_label_set_text(_device_menu_message, "One Mac at a time");
+    rebuildDeviceRows();
+    TouchIntent intent;
+    intent.type = TouchIntentType::DeviceMenuOpened;
+    enqueueIntent(intent);
+}
+
+void DashboardView::closeDeviceMenu()
+{
+    cancelTouch();
+    if (_device_overlay != nullptr) {
+        lv_obj_add_flag(_device_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+    _device_menu_open.store(false);
+}
+
+void DashboardView::showSelectionError()
+{
+    if (_device_menu_message != nullptr && deviceMenuOpen()) {
+        lv_label_set_text(_device_menu_message, "Please choose the Mac again");
+    }
+}
+
+void DashboardView::rebuildDeviceRows()
+{
+    if (_device_list == nullptr) {
+        return;
+    }
+    const int32_t scroll_y = lv_obj_get_scroll_y(_device_list);
+    lv_obj_clean(_device_list);
+    if (_hosts.empty()) {
+        auto* empty = lv_label_create(_device_list);
+        makeTransparentLabel(empty, &lv_font_montserrat_16, kSecondaryText);
+        lv_obj_set_width(empty, 286);
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_label_set_text(empty, "No Macs connected yet\n\nConnect a Mac with USB\nor Bluetooth to get started.");
+    }
+    for (size_t i = 0; i < std::min(_hosts.size(), _host_bindings.size()); ++i) {
+        const auto& host = _hosts[i];
+        auto* row = lv_button_create(_device_list);
+        lv_obj_set_size(row, 286, 68);
+        lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(row, 14, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(row, lv_color_hex(kPanelColor), LV_PART_MAIN);
+        lv_obj_set_style_border_color(row, lv_color_hex(host.selected ? kFiveHourColor : kTrackColor), LV_PART_MAIN);
+        lv_obj_set_style_border_width(row, host.selected ? 2 : 1, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(row, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        _host_bindings[i] = HostBinding{this, host.id};
+        lv_obj_add_event_cb(row, handleHostEvent, LV_EVENT_CLICKED, &_host_bindings[i]);
+
+        auto* name = lv_label_create(row);
+        makeTransparentLabel(name, &lv_font_montserrat_16, kPrimaryText);
+        lv_obj_set_size(name, 224, lv_font_get_line_height(&lv_font_montserrat_16));
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        lv_label_set_text(name, host.name.c_str());
+        lv_obj_set_pos(name, 16, 11);
+
+        auto* status = lv_label_create(row);
+        makeTransparentLabel(status, &lv_font_montserrat_14, host.online ? kFiveHourColor : kSecondaryText);
+        const char* transport = host.usbAvailable ? (host.bleAvailable ? "USB + BLE" : "USB") : "BLE";
+        lv_label_set_text(status, host.online ? transport : "Offline");
+        lv_obj_set_pos(status, 16, 38);
+        if (host.selected) {
+            auto* selected = lv_label_create(row);
+            makeTransparentLabel(selected, &lv_font_montserrat_16, kFiveHourColor);
+            lv_label_set_text(selected, LV_SYMBOL_OK);
+            lv_obj_set_pos(selected, 253, 24);
+        }
+    }
+    lv_obj_update_layout(_device_list);
+    lv_obj_scroll_to_y(_device_list, scroll_y, LV_ANIM_OFF);
+}
+
+void DashboardView::handleHostEvent(lv_event_t* event)
+{
+    auto* binding = static_cast<HostBinding*>(lv_event_get_user_data(event));
+    if (binding == nullptr || binding->owner == nullptr || !binding->owner->deviceMenuOpen()) {
+        return;
+    }
+    TouchIntent intent;
+    intent.type = TouchIntentType::SelectHost;
+    std::snprintf(intent.hostId, sizeof(intent.hostId), "%s", binding->hostId.c_str());
+    binding->owner->enqueueIntent(intent);
+    lv_label_set_text(binding->owner->_device_menu_message, "Selecting Mac...");
 }
 
 void DashboardView::enqueueIntent(const TouchIntent& intent)

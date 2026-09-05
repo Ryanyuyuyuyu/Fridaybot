@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "host_selection.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +43,12 @@ struct State {
     uint32_t lastHostRpcAtMs = 0;
     uint32_t connectionEpoch = 0;
     uint32_t revision        = 0;
+    std::vector<HostInfo> hosts;
+    std::string activeHostId;
+    std::string activeHostName;
+    std::string preferredHostId;
+    Transport transport = Transport::Ble;
+    bool usbMounted = false;
 };
 
 // A process-lifetime BLE service. Closing the Codex Micro UI must not destroy
@@ -55,8 +63,9 @@ public:
     bool begin();
     State snapshot() const;
     void setBattery(uint8_t percentage, bool charging);
-    void sendKey(const char* key, uint8_t action, int8_t agent = -1);
-    void sendJoystick(float angle, float distance);
+    void sendKey(const char* key, uint8_t action, int8_t agent = -1, uint32_t expectedEpoch = UINT32_MAX);
+    void sendJoystick(float angle, float distance, uint32_t expectedEpoch = UINT32_MAX);
+    bool selectHost(const std::string& hostId);
 
     // Friday shares this process-lifetime Bluedroid host. These adapter
     // methods intentionally accept protocol bytes so the transport does not

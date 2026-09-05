@@ -1,0 +1,9 @@
+# Apply after sdkconfig.defaults in a separate build/configuration file.
+# USB OTG takes the internal PHY from USB Serial/JTAG while the app runs.
+CONFIG_CODEX_MICRO_USB_HID=y
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+# CONFIG_USJ_ENABLE_USB_SERIAL_JTAG is not set

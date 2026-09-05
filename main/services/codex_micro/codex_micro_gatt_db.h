@@ -26,6 +26,9 @@ inline uint8_t kQuotaServiceUuid[ESP_UUID_LEN_128] = {
 inline uint8_t kQuotaWriteUuid[ESP_UUID_LEN_128] = {
     0x02, 0x5c, 0x0e, 0x1a, 0xf6, 0x4e, 0xbe, 0xbf, 0x71, 0x4a, 0xc2, 0x2a, 0x66, 0x4e, 0x0d, 0x7f,
 };
+inline uint8_t kHostIdentityUuid[ESP_UUID_LEN_128] = {
+    0x03, 0x5c, 0x0e, 0x1a, 0xf6, 0x4e, 0xbe, 0xbf, 0x71, 0x4a, 0xc2, 0x2a, 0x66, 0x4e, 0x0d, 0x7f,
+};
 // Canonical UUIDs, stored in the Bluetooth little-endian byte order used by
 // ESP-IDF/Bluedroid:
 //   46524944-4159-0001-8000-00805F9B34FB (Friday service)
@@ -108,6 +111,8 @@ enum QuotaIndex : uint8_t {
     kQuotaService,
     kQuotaDeclaration,
     kQuotaValue,
+    kHostIdentityDeclaration,
+    kHostIdentityValue,
     kQuotaCount,
 };
 
@@ -176,6 +181,7 @@ inline uint8_t kBatteryPresentation[]             = {
     0x00, 0x00,  // no description
 };
 inline uint8_t kQuotaInitialValue[kMaxQuotaSize] = {};
+inline uint8_t kHostIdentityInitialValue[128] = {};
 inline uint8_t kFridayContextInitialValue[4]      = {1, 0, 0, 0};
 inline uint8_t kFridayTransferInitialValue[10]    = {};
 inline uint8_t kFridayTransferCccdValue[2]        = {0x00, 0x00};
@@ -264,6 +270,10 @@ inline const esp_gatts_attr_db_t kQuotaDb[kQuotaCount] = {
     CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyWrite), sizeof(kPropertyWrite),
                  &kPropertyWrite),
     CODEX_ATTR128(kQuotaWriteUuid, ESP_GATT_PERM_WRITE_ENCRYPTED, sizeof(kQuotaInitialValue), 0, kQuotaInitialValue),
+    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyWrite), sizeof(kPropertyWrite),
+                 &kPropertyWrite),
+    CODEX_ATTR128(kHostIdentityUuid, ESP_GATT_PERM_WRITE_ENCRYPTED, sizeof(kHostIdentityInitialValue), 0,
+                  kHostIdentityInitialValue),
 };
 
 inline const esp_gatts_attr_db_t kFridayDb[kFridayCount] = {

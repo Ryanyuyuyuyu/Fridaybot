@@ -44,6 +44,9 @@ private:
     void beginRightCommandPulse(uint32_t now);
     void beginAnalogPulse(float angle, uint32_t now);
     void releaseAllControls();
+    void clearControlState();
+    void synchronizeControlRoute();
+    bool controlsBlocked() const;
 
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<codex_micro_app::view::DashboardView> _view;
@@ -67,6 +70,11 @@ private:
 
     bool _button_chord_active   = false;
     bool _button_chord_canceled = false;
+    bool _controls_armed = false;
+    bool _host_selection_pending = false;
+    std::string _pending_host_id;
+    uint32_t _host_selection_requested_at = 0;
+    uint32_t _last_connection_epoch = UINT32_MAX;
 
     uint8_t _battery_level          = 0;
     bool _battery_charging          = false;

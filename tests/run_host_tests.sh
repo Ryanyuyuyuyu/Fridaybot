@@ -20,6 +20,20 @@ compile_and_run() {
     printf '%s\n' "$test_name: PASS"
 }
 
+compile_and_run ble_sessions_test \
+    "$test_repo_root/tests/ble_sessions_test.cpp"
+
+compile_and_run host_selection_test \
+    "$test_repo_root/tests/host_selection_test.cpp" \
+    "$test_repo_root/main/services/codex_micro/host_selection.cpp"
+
+compile_and_run usb_disabled_test \
+    "$test_repo_root/tests/usb_disabled_test.cpp" \
+    "$test_repo_root/main/services/codex_micro/usb_transport.cpp"
+
+compile_and_run usb_descriptor_test \
+    "$test_repo_root/tests/usb_descriptor_test.cpp"
+
 compile_and_run face_model_test \
     "$test_repo_root/tests/face_model_test.cpp" \
     "$test_repo_root/main/apps/app_friday/face_model.cpp"
