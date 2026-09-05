@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <src/core/lv_obj_event_private.h>
+#include <src/misc/lv_text_private.h>
 
 namespace codex_micro_app::view {
 namespace {
@@ -622,41 +623,98 @@ bool DashboardView::init(lv_obj_t* parent)
         lv_obj_center(label);
     }
 
-    // Keep the original six equally sized Agent circles. Connection details
-    // sit quietly in the unused upper-left wedge of the round display.
+    // The small arc between A6 and A1 is a device-picker target. Its hit test
+    // follows the circular edge and leaves every original Agent radius intact.
     _connection_button = lv_obj_create(_root);
     lv_obj_remove_style_all(_connection_button);
-    lv_obj_set_size(_connection_button, 84, 39);
-    lv_obj_set_pos(_connection_button, 88, 55);
+    lv_obj_set_size(_connection_button, 100, 82);
+    lv_obj_set_pos(_connection_button, 80, 15);
     lv_obj_add_flag(_connection_button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(_connection_button, LV_OBJ_FLAG_ADV_HITTEST);
     lv_obj_clear_flag(_connection_button, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(_connection_button, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(_connection_button, handleDeviceMenuEvent, LV_EVENT_CLICKED, this);
-    _connection_label = lv_label_create(_connection_button);
-    makeTransparentLabel(_connection_label, &lv_font_montserrat_14, kSecondaryText);
-    lv_obj_set_size(_connection_label, 78, lv_font_get_line_height(&lv_font_montserrat_14));
-    lv_label_set_long_mode(_connection_label, LV_LABEL_LONG_DOT);
-    lv_label_set_text(_connection_label, "Choose Mac");
-    lv_obj_set_pos(_connection_label, 4, 0);
-    _connection_dot = makeDecorativeObject(_connection_button, 3, 3, kSecondaryText);
-    lv_obj_set_style_radius(_connection_dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_pos(_connection_dot, 4, 25);
-    _transport_label = lv_label_create(_connection_button);
-    makeTransparentLabel(_transport_label, &lv_font_montserrat_10, kSecondaryText);
-    lv_obj_set_width(_transport_label, 58);
-    lv_label_set_text(_transport_label, "Offline");
-    lv_obj_set_pos(_transport_label, 13, 20);
-    auto* connection_chevron = lv_label_create(_connection_button);
-    makeTransparentLabel(connection_chevron, &lv_font_montserrat_10, kSecondaryText);
-    lv_label_set_text(connection_chevron, LV_SYMBOL_DOWN);
-    lv_obj_set_pos(connection_chevron, 73, 22);
+    lv_obj_add_event_cb(_connection_button, handleConnectionHitTest, LV_EVENT_HIT_TEST, this);
 
-    _battery_label = lv_label_create(_root);
-    makeTransparentLabel(_battery_label, &lv_font_montserrat_10, kSecondaryText);
-    lv_label_set_text(_battery_label, "BAT --%");
-    lv_obj_set_pos(_battery_label, 303, 78);
+    for (auto* arc : {&_connection_text, &_transport_text, &_battery_text}) {
+        for (auto*& glyph : arc->glyphs) {
+            glyph = lv_label_create(_root);
+            makeTransparentLabel(glyph, arc == &_battery_text ? &lv_font_montserrat_14 : &lv_font_montserrat_18,
+                                 kPrimaryText);
+            lv_obj_add_flag(glyph, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     return true;
+}
+
+void DashboardView::updateArcText(ArcText& arc, const std::string& text, const lv_font_t* font, float radius,
+                                  float angle, int32_t maxWidth, uint32_t color)
+{
+    if (arc.text == text && arc.color == color) {
+        return;
+    }
+    arc.text = text;
+    arc.color = color;
+    std::vector<std::string> characters;
+    std::vector<int32_t> widths;
+    int32_t totalWidth = 0;
+    for (uint32_t offset = 0; offset < text.size();) {
+        const uint32_t start = offset;
+        lv_text_encoded_next(text.c_str(), &offset);
+        if (offset <= start) {
+            break;
+        }
+        characters.emplace_back(text.substr(start, offset - start));
+        lv_point_t size;
+        lv_text_get_size(&size, characters.back().c_str(), font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        widths.push_back(size.x + 1);
+        totalWidth += widths.back();
+        if (characters.size() == arc.glyphs.size() || totalWidth > maxWidth) {
+            // Keep real names safe before an optional short Mac P/W alias is
+            // configured. Trim whole UTF-8 characters; full names stay in the list.
+            constexpr int32_t dotsWidth = 15;
+            while (!characters.empty() &&
+                   (totalWidth + dotsWidth > maxWidth || characters.size() + 3 > arc.glyphs.size())) {
+                totalWidth -= widths.back();
+                widths.pop_back();
+                characters.pop_back();
+            }
+            for (int i = 0; i < 3; ++i) {
+                characters.emplace_back(".");
+                widths.push_back(dotsWidth / 3);
+                totalWidth += widths.back();
+            }
+            break;
+        }
+    }
+    float advance = -static_cast<float>(totalWidth) / 2.0f;
+    for (size_t i = 0; i < arc.glyphs.size(); ++i) {
+        auto*& glyph = arc.glyphs[i];
+        if (i >= characters.size()) {
+            if (glyph != nullptr) {
+                lv_obj_add_flag(glyph, LV_OBJ_FLAG_HIDDEN);
+            }
+            continue;
+        }
+        if (glyph == nullptr) {
+            glyph = lv_label_create(_root);
+            makeTransparentLabel(glyph, font, color);
+        }
+        lv_obj_clear_flag(glyph, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(glyph, lv_color_hex(color), LV_PART_MAIN);
+        lv_label_set_text(glyph, characters[i].c_str());
+        const int32_t height = lv_font_get_line_height(font);
+        const float glyphAngle = angle + (advance + widths[i] / 2.0f) / radius * 180.0f / kPi;
+        const float radians = glyphAngle * kPi / 180.0f;
+        lv_obj_set_size(glyph, widths[i] + 2, height + 2);
+        lv_obj_set_style_transform_pivot_x(glyph, (widths[i] + 2) / 2, LV_PART_MAIN);
+        lv_obj_set_style_transform_pivot_y(glyph, (height + 2) / 2, LV_PART_MAIN);
+        lv_obj_set_style_transform_rotation(glyph, std::lround((glyphAngle - 270.0f) * 10.0f), LV_PART_MAIN);
+        lv_obj_set_pos(glyph, std::lround(233 + radius * std::cos(radians) - (widths[i] + 2) / 2.0f),
+                       std::lround(233 + radius * std::sin(radians) - (height + 2) / 2.0f));
+        advance += widths[i];
+    }
 }
 
 bool DashboardView::popIntent(TouchIntent& intent)
@@ -670,12 +728,16 @@ void DashboardView::update(const DashboardModel& model)
         return;
     }
 
-    lv_label_set_text(_connection_label, model.connectionText.c_str());
-    lv_label_set_text(_transport_label, model.transportText.c_str());
-    lv_obj_set_style_text_color(_transport_label,
-                                lv_color_hex(blendColor(kSecondaryText, model.connectionColor, 0.45f)), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(_connection_dot, lv_color_hex(model.connectionColor), LV_PART_MAIN);
-    lv_label_set_text(_battery_label, model.batteryText.c_str());
+    updateArcText(_connection_text, model.connectionText.empty() ? "Mac" : model.connectionText,
+                  &lv_font_montserrat_18, 207, 241, 70, kPrimaryText);
+    updateArcText(_transport_text, model.transportText, &lv_font_montserrat_18, 211, 299, 72,
+                  model.transportText == "Offline" ? 0xFF9AA5 : kPrimaryText);
+    std::string battery = model.batteryText;
+    if (battery.compare(0, 3, "BAT") == 0) {
+        battery.erase(0, 3);
+    }
+    battery.erase(std::remove(battery.begin(), battery.end(), ' '), battery.end());
+    updateArcText(_battery_text, battery, &lv_font_montserrat_14, 185, 299, 70, 0xAAB7C0);
 
     const auto same_host = [](const codex_micro::HostInfo& left, const codex_micro::HostInfo& right) {
         return left.id == right.id && left.name == right.name && left.online == right.online &&
@@ -780,6 +842,25 @@ void DashboardView::handleCircleHitTest(lv_event_t* event)
     const int32_t delta_y  = info->point->y - center_y;
     const int32_t radius   = binding->isSend ? 104 : 60;
     info->res              = delta_x * delta_x + delta_y * delta_y <= radius * radius;
+}
+
+void DashboardView::handleConnectionHitTest(lv_event_t* event)
+{
+    auto* info = lv_event_get_hit_test_info(event);
+    if (info == nullptr || info->point == nullptr) {
+        return;
+    }
+    const int32_t x = info->point->x;
+    const int32_t y = info->point->y;
+    const int32_t dx = x - 233;
+    const int32_t dy = y - 233;
+    const int32_t squaredRadius = dx * dx + dy * dy;
+    info->res = squaredRadius >= 180 * 180 && squaredRadius <= 233 * 233;
+    for (const auto& center : kAgentCenters) {
+        if ((x - center.x) * (x - center.x) + (y - center.y) * (y - center.y) <= 60 * 60) {
+            info->res = false;
+        }
+    }
 }
 
 void DashboardView::handleGestureEvent(lv_event_t* event)

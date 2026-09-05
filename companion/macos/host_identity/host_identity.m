@@ -14,8 +14,7 @@
 static const NSInteger kVendorID = 0x303A;
 static const NSInteger kProductID = 0x8360;
 static const uint8_t kIdentityReportID = 7;
-enum { kIdentityBodySize = 128 };
-static const NSUInteger kNameByteLimit = 31;
+enum { kIdentityBodySize = 128, kNameByteLimit = 31 };
 
 static CBUUID *ServiceUUID(void) { return [CBUUID UUIDWithString:@"7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C01"]; }
 static CBUUID *QuotaUUID(void) { return [CBUUID UUIDWithString:@"7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C02"]; }
@@ -73,18 +72,24 @@ static NSString *LocalMacName(void)
     return name.length ? name : @"Mac";
 }
 
-static NSString *LoadIdentity(NSURL *directory, NSError **error)
+static BOOL PreparePrivateDirectory(NSURL *directory, NSError **error)
 {
     NSFileManager *fm = NSFileManager.defaultManager;
     if (![fm createDirectoryAtURL:directory withIntermediateDirectories:YES
-                       attributes:@{NSFilePosixPermissions: @0700} error:error]) return nil;
+                       attributes:@{NSFilePosixPermissions: @0700} error:error]) return NO;
     struct stat directoryAttributes;
     if (lstat(directory.fileSystemRepresentation, &directoryAttributes) != 0 ||
         !S_ISDIR(directoryAttributes.st_mode) || directoryAttributes.st_uid != getuid() ||
         chmod(directory.fileSystemRepresentation, 0700) != 0) {
         if (error) *error = Failure(@"The identity directory must be a private directory owned by the current user.");
-        return nil;
+        return NO;
     }
+    return YES;
+}
+
+static NSString *LoadIdentity(NSURL *directory, NSError **error)
+{
+    if (!PreparePrivateDirectory(directory, error)) return nil;
     NSURL *lockURL = [directory URLByAppendingPathComponent:@"identity.lock"];
     int lockFD = open(lockURL.fileSystemRepresentation, O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
     if (lockFD < 0) {
@@ -132,6 +137,107 @@ static NSString *LoadIdentity(NSURL *directory, NSError **error)
     return hostID;
 }
 
+static BOOL ValidDisplayName(NSString *name, NSError **error)
+{
+    if (!name.length || ![name isEqual:[name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]] ||
+        [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound ||
+        [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding] > kNameByteLimit) {
+        if (error) *error = Failure(@"Display name must be 1–31 UTF-8 bytes, with no control characters or surrounding whitespace.");
+        return NO;
+    }
+    // Explicit aliases must arrive unchanged, including when JSON escaping adds bytes.
+    NSData *data = IdentityData(@"5c5b1aad-3f81-4d87-9033-7e08be65e4a8", name, error);
+    NSDictionary *decoded = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:error] : nil;
+    if (![decoded[@"name"] isEqual:name]) {
+        if (error) *error = Failure(@"Display name cannot fit the identity report unchanged; use a shorter name.");
+        return NO;
+    }
+    return YES;
+}
+
+typedef NS_ENUM(NSUInteger, DisplayNameOperation) { DisplayNameRead, DisplayNameWrite, DisplayNameClear };
+
+// A missing alias is nil without an error. Explicit set/clear never touches host-id.
+static NSString *DisplayNameSetting(NSURL *directory, DisplayNameOperation operation, NSString *name, NSError **error)
+{
+    if (operation == DisplayNameWrite && !ValidDisplayName(name, error)) return nil;
+    if (!PreparePrivateDirectory(directory, error)) return nil;
+    int directoryFD = open(directory.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    int lockFD = directoryFD < 0 ? -1 : openat(directoryFD, "display-name.lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
+    struct stat attributes;
+    BOOL locked = lockFD >= 0 && fstat(lockFD, &attributes) == 0 && S_ISREG(attributes.st_mode) &&
+                  attributes.st_uid == getuid() && attributes.st_nlink == 1 && fchmod(lockFD, 0600) == 0 &&
+                  flock(lockFD, LOCK_EX) == 0;
+    if (!locked) {
+        if (lockFD >= 0) close(lockFD);
+        if (directoryFD >= 0) close(directoryFD);
+        if (error) *error = Failure(@"Cannot safely lock the display name.");
+        return nil;
+    }
+    NSString *result = nil;
+    do {
+        int existing = fstatat(directoryFD, "display-name", &attributes, AT_SYMLINK_NOFOLLOW);
+        if ((existing == 0 && (!S_ISREG(attributes.st_mode) || attributes.st_uid != getuid() || attributes.st_nlink != 1)) ||
+            (existing != 0 && errno != ENOENT)) {
+            if (error) *error = Failure(@"The display-name path must be a regular private file owned by the current user.");
+            break;
+        }
+        if (operation == DisplayNameClear) {
+            if (existing == 0 && unlinkat(directoryFD, "display-name", 0) != 0 && error) *error = Failure(@"Cannot clear the display name.");
+        } else if (operation == DisplayNameWrite) {
+            NSString *temporaryName = [@".display-name-" stringByAppendingString:NSUUID.UUID.UUIDString];
+            int output = openat(directoryFD, temporaryName.UTF8String, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0600);
+            NSData *bytes = [[name stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+            BOOL saved = output >= 0;
+            NSUInteger written = 0;
+            while (saved && written < bytes.length) {
+                ssize_t count = write(output, (const uint8_t *)bytes.bytes + written, bytes.length - written);
+                if (count < 0 && errno == EINTR) continue;
+                if (count <= 0) saved = NO;
+                else written += (NSUInteger)count;
+            }
+            if (saved && fsync(output) != 0) saved = NO;
+            if (output >= 0 && close(output) != 0) saved = NO;
+            if (saved) saved = renameat(directoryFD, temporaryName.UTF8String, directoryFD, "display-name") == 0;
+            if (saved) result = name;
+            else {
+                unlinkat(directoryFD, temporaryName.UTF8String, 0);
+                if (error) *error = Failure(@"Cannot save the display name atomically.");
+            }
+        } else if (existing == 0) {
+            int input = openat(directoryFD, "display-name", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+            uint8_t bytes[kNameByteLimit + 2]; // limit plus newline, plus one overflow-detection byte
+            NSUInteger length = 0;
+            BOOL valid = input >= 0 && fstat(input, &attributes) == 0 && S_ISREG(attributes.st_mode) &&
+                         attributes.st_uid == getuid() && attributes.st_nlink == 1 && fchmod(input, 0600) == 0;
+            while (valid && length < sizeof(bytes)) {
+                ssize_t count = read(input, bytes + length, sizeof(bytes) - length);
+                if (count < 0 && errno == EINTR) continue;
+                if (count < 0) valid = NO;
+                if (count <= 0) break;
+                length += (NSUInteger)count;
+            }
+            if (input >= 0) close(input);
+            if (valid && length <= kNameByteLimit + 1 && length > 0 && bytes[length - 1] == '\n') --length;
+            NSString *stored = valid && length <= kNameByteLimit ? [[NSString alloc] initWithBytes:bytes length:length encoding:NSUTF8StringEncoding] : nil;
+            if (ValidDisplayName(stored, error)) result = stored;
+            else if (error) *error = Failure(@"Stored display-name is invalid; use --name to replace it or --clear-name to restore LocalHostName.");
+        }
+    } while (NO);
+    flock(lockFD, LOCK_UN);
+    close(lockFD);
+    close(directoryFD);
+    return result;
+}
+
+static NSString *EffectiveDisplayName(NSURL *directory, NSError **error)
+{
+    NSError *readError = nil;
+    NSString *alias = DisplayNameSetting(directory, DisplayNameRead, nil, &readError);
+    if (readError) { if (error) *error = readError; return nil; }
+    return alias ?: LocalMacName();
+}
+
 @interface BLESession : NSObject
 @property(nonatomic, strong) CBPeripheral *peripheral;
 @property(nonatomic, strong) CBCharacteristic *identity;
@@ -148,7 +254,7 @@ static NSString *LoadIdentity(NSURL *directory, NSError **error)
 @end
 
 @interface IdentityBridge : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>
-- (instancetype)initWithHostID:(NSString *)hostID codexBin:(NSString *)codexBin;
+- (instancetype)initWithHostID:(NSString *)hostID directory:(NSURL *)directory codexBin:(NSString *)codexBin;
 - (void)usbAttached:(IOHIDDeviceRef)device;
 - (void)usbRemoved:(IOHIDDeviceRef)device;
 - (void)start;
@@ -167,6 +273,7 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
 
 @implementation IdentityBridge {
     NSString *_hostID;
+    NSURL *_directory;
     CBCentralManager *_central;
     NSMutableDictionary<NSUUID *, BLESession *> *_sessions;
     NSMutableDictionary<NSUUID *, NSDate *> *_retryAfter;
@@ -178,11 +285,12 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     NSTimeInterval _nextQuotaRead;
 }
 
-- (instancetype)initWithHostID:(NSString *)hostID codexBin:(NSString *)codexBin
+- (instancetype)initWithHostID:(NSString *)hostID directory:(NSURL *)directory codexBin:(NSString *)codexBin
 {
     self = [super init];
     if (self) {
         _hostID = hostID;
+        _directory = directory;
         _codexBin = codexBin;
         _sessions = [NSMutableDictionary dictionary];
         _retryAfter = [NSMutableDictionary dictionary];
@@ -213,7 +321,8 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
 - (NSData *)payload
 {
     NSError *error = nil;
-    NSData *data = IdentityData(_hostID, LocalMacName(), &error);
+    NSString *name = EffectiveDisplayName(_directory, &error);
+    NSData *data = name ? IdentityData(_hostID, name, &error) : nil;
     if (!data) fprintf(stderr, "[Identity] %s\n", error.localizedDescription.UTF8String);
     return data;
 }
@@ -493,6 +602,74 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
 }
 @end
 
+static BOOL TestDisplayNames(NSUInteger *passed)
+{
+    NSURL *temp = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]
+                            isDirectory:YES];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSURL *nameURL = [temp URLByAppendingPathComponent:@"display-name"];
+    NSURL *idURL = [temp URLByAppendingPathComponent:@"host-id"];
+    NSError *error = nil;
+    NSUInteger checks = 0;
+#define CHECK_NAME(condition) do { if (!(condition)) { fprintf(stderr, "Self-test: display-name case %lu failed.\n", (unsigned long)checks); return NO; } ++checks; } while (NO)
+    @try {
+        CHECK_NAME(!DisplayNameSetting(temp, DisplayNameRead, nil, &error) && !error && ![fm fileExistsAtPath:idURL.path]);
+        CHECK_NAME([DisplayNameSetting(temp, DisplayNameWrite, @"Mac P", &error) isEqual:@"Mac P"] && !error);
+        CHECK_NAME([DisplayNameSetting(temp, DisplayNameRead, nil, &error) isEqual:@"Mac P"] && !error && ![fm fileExistsAtPath:idURL.path]);
+        struct stat attributes;
+        CHECK_NAME(stat(nameURL.fileSystemRepresentation, &attributes) == 0 && (attributes.st_mode & 0777) == 0600 &&
+                   stat(temp.fileSystemRepresentation, &attributes) == 0 && (attributes.st_mode & 0777) == 0700);
+        NSString *hostID = LoadIdentity(temp, &error);
+        NSData *originalIDFile = [NSData dataWithContentsOfURL:idURL];
+        CHECK_NAME(hostID && !error && originalIDFile);
+        CHECK_NAME([DisplayNameSetting(temp, DisplayNameWrite, @"Mac W", &error) isEqual:@"Mac W"] && !error &&
+                   [EffectiveDisplayName(temp, &error) isEqual:@"Mac W"] && [[NSData dataWithContentsOfURL:idURL] isEqual:originalIDFile]);
+        NSArray *invalid = @[@"", @" ", @" Mac P", @"Mac P ", @"Mac\nP", @"Mac\tP",
+                             [@"a" stringByPaddingToLength:32 withString:@"a" startingAtIndex:0],
+                             [@"测" stringByPaddingToLength:11 withString:@"测" startingAtIndex:0],
+                             [@"\"" stringByPaddingToLength:31 withString:@"\"" startingAtIndex:0]];
+        for (NSString *name in invalid) {
+            error = nil;
+            CHECK_NAME(!DisplayNameSetting(temp, DisplayNameWrite, name, &error) && error);
+            error = nil;
+            CHECK_NAME([DisplayNameSetting(temp, DisplayNameRead, nil, &error) isEqual:@"Mac W"] && !error);
+        }
+        for (NSString *name in @[@"私人 Mac", [@"a" stringByPaddingToLength:31 withString:@"a" startingAtIndex:0]]) {
+            error = nil;
+            CHECK_NAME([DisplayNameSetting(temp, DisplayNameWrite, name, &error) isEqual:name] && !error &&
+                       [DisplayNameSetting(temp, DisplayNameRead, nil, &error) isEqual:name]);
+        }
+        const uint8_t corrupt[] = {0xff, 0xfe, '\n'};
+        CHECK_NAME([[NSData dataWithBytes:corrupt length:sizeof(corrupt)] writeToURL:nameURL options:0 error:&error]);
+        error = nil;
+        CHECK_NAME(!EffectiveDisplayName(temp, &error) && error);
+        error = nil;
+        CHECK_NAME([DisplayNameSetting(temp, DisplayNameWrite, @"Mac P", &error) isEqual:@"Mac P"] && !error);
+        CHECK_NAME(!DisplayNameSetting(temp, DisplayNameClear, nil, &error) && !error && ![fm fileExistsAtPath:nameURL.path] &&
+                   [EffectiveDisplayName(temp, &error) isEqual:LocalMacName()] && [[NSData dataWithContentsOfURL:idURL] isEqual:originalIDFile]);
+        CHECK_NAME(!DisplayNameSetting(temp, DisplayNameClear, nil, &error) && !error);
+        CHECK_NAME(symlink(idURL.fileSystemRepresentation, nameURL.fileSystemRepresentation) == 0);
+        for (NSNumber *operation in @[@(DisplayNameRead), @(DisplayNameWrite), @(DisplayNameClear)]) {
+            error = nil;
+            CHECK_NAME(!DisplayNameSetting(temp, operation.unsignedIntegerValue, @"Mac W", &error) && error &&
+                       [[NSData dataWithContentsOfURL:idURL] isEqual:originalIDFile]);
+        }
+        CHECK_NAME(unlink(nameURL.fileSystemRepresentation) == 0 && link(idURL.fileSystemRepresentation, nameURL.fileSystemRepresentation) == 0);
+        error = nil;
+        CHECK_NAME(!DisplayNameSetting(temp, DisplayNameRead, nil, &error) && error && [[NSData dataWithContentsOfURL:idURL] isEqual:originalIDFile]);
+        CHECK_NAME(unlink(nameURL.fileSystemRepresentation) == 0);
+        NSString *oversized = [@"a" stringByPaddingToLength:4096 withString:@"a" startingAtIndex:0];
+        error = nil;
+        CHECK_NAME([oversized writeToURL:nameURL atomically:YES encoding:NSUTF8StringEncoding error:&error]);
+        CHECK_NAME(!DisplayNameSetting(temp, DisplayNameRead, nil, &error) && error);
+        *passed = checks;
+        return YES;
+    } @finally {
+        [fm removeItemAtURL:temp error:nil];
+    }
+#undef CHECK_NAME
+}
+
 static int SelfTest(void)
 {
     NSString *hostID = @"5c5b1aad-3f81-4d87-9033-7e08be65e4a8";
@@ -533,15 +710,23 @@ static int SelfTest(void)
     if (!okay) { fprintf(stderr, "Self-test: persistent identity validation failed.\n"); return 1; }
     if (!TestQuotaEncoding()) { fprintf(stderr, "Self-test: quota encoding failed.\n"); return 1; }
     checks += 5;
+    NSUInteger nameChecks = 0;
+    if (!TestDisplayNames(&nameChecks)) return 1;
+    checks += nameChecks;
     printf("{\"selfTest\":\"passed\",\"checks\":%lu,\"hardwareAccessed\":false}\n", (unsigned long)checks);
     return 0;
 }
 
 static void Usage(void)
 {
-    puts("Usage: codex-host-identity [--help | --self-test | --show-identity] [--codex-bin PATH | --no-quota]\n"
+    puts("Usage: codex-host-identity [--help | --self-test | --show-identity | --show-name | --name NAME | --clear-name]\n"
+         "       codex-host-identity [--codex-bin PATH | --no-quota]\n"
          "  No arguments: announce this Mac over BLE/USB and sync Codex quota.\n"
          "  --show-identity  Print/create the local identity without accessing hardware.\n"
+         "  --show-name      Print the effective display name and its source, then exit.\n"
+         "  --name NAME      Save a display alias (for example 'Mac P'), then exit.\n"
+         "  --clear-name     Remove the alias and restore LocalHostName, then exit.\n"
+         "  Name commands never create/change the UUID or access hardware.\n"
          "  --self-test      Validate encoding and temporary-file persistence offline.\n"
          "  --codex-bin PATH Use this absolute Codex executable for read-only quota calls.\n"
          "  --no-quota       Announce identity without starting a Codex app-server.\n"
@@ -553,25 +738,51 @@ int main(int argc, const char *argv[])
 {
     @autoreleasepool {
         setvbuf(stdout, NULL, _IOLBF, 0);
-        BOOL showIdentity = NO, quotaEnabled = YES;
-        NSString *codexBin = nil;
+        BOOL showIdentity = NO, showName = NO, clearName = NO, quotaEnabled = YES, runtimeOptions = NO;
+        NSUInteger offlineActions = 0;
+        NSString *codexBin = nil, *requestedName = nil;
         for (int index = 1; index < argc; ++index) {
             if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) { Usage(); return 0; }
             if (strcmp(argv[index], "--self-test") == 0 && argc == 2) return SelfTest();
-            if (strcmp(argv[index], "--show-identity") == 0) showIdentity = YES;
-            else if (strcmp(argv[index], "--no-quota") == 0) quotaEnabled = NO;
+            if (strcmp(argv[index], "--show-identity") == 0) { showIdentity = YES; ++offlineActions; }
+            else if (strcmp(argv[index], "--show-name") == 0) { showName = YES; ++offlineActions; }
+            else if (strcmp(argv[index], "--clear-name") == 0) { clearName = YES; ++offlineActions; }
+            else if (strcmp(argv[index], "--name") == 0 && index + 1 < argc) {
+                requestedName = [NSString stringWithUTF8String:argv[++index]];
+                if (!requestedName) { fprintf(stderr, "--name requires valid UTF-8.\n"); return 2; }
+                ++offlineActions;
+            }
+            else if (strcmp(argv[index], "--no-quota") == 0) { quotaEnabled = NO; runtimeOptions = YES; }
             else if (strcmp(argv[index], "--codex-bin") == 0 && index + 1 < argc) {
+                runtimeOptions = YES;
                 codexBin = [NSString stringWithUTF8String:argv[++index]];
                 if (!codexBin.isAbsolutePath) { fprintf(stderr, "--codex-bin requires an absolute path.\n"); return 2; }
             } else { Usage(); return 2; }
         }
+        if (offlineActions > 1 || (offlineActions && runtimeOptions)) {
+            fprintf(stderr, "Use one offline command at a time, without startup options.\n");
+            return 2;
+        }
         NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
         NSURL *directory = [support URLByAppendingPathComponent:@"Friday/Codex Host Identity" isDirectory:YES];
         NSError *error = nil;
+        if (showName || clearName || requestedName) {
+            DisplayNameOperation operation = requestedName ? DisplayNameWrite : clearName ? DisplayNameClear : DisplayNameRead;
+            NSString *alias = DisplayNameSetting(directory, operation, requestedName, &error);
+            if (error) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
+            NSData *identity = IdentityData(@"5c5b1aad-3f81-4d87-9033-7e08be65e4a8", alias ?: LocalMacName(), &error);
+            NSDictionary *decoded = identity ? [NSJSONSerialization JSONObjectWithData:identity options:0 error:&error] : nil;
+            NSData *details = decoded ? [NSJSONSerialization dataWithJSONObject:@{@"name": decoded[@"name"], @"source": alias ? @"alias" : @"LocalHostName"}
+                                                                        options:NSJSONWritingSortedKeys error:&error] : nil;
+            if (!details) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
+            puts([[NSString alloc] initWithData:details encoding:NSUTF8StringEncoding].UTF8String);
+            return 0;
+        }
         NSString *hostID = LoadIdentity(directory, &error);
         if (!hostID) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
         if (showIdentity) {
-            NSData *data = IdentityData(hostID, LocalMacName(), &error);
+            NSString *name = EffectiveDisplayName(directory, &error);
+            NSData *data = name ? IdentityData(hostID, name, &error) : nil;
             if (!data) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
             puts([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String);
             return 0;
@@ -586,7 +797,7 @@ int main(int argc, const char *argv[])
         if (quotaEnabled && !codexBin) codexBin = FindCodexExecutable();
         if (quotaEnabled && !codexBin) fprintf(stderr, "[Quota] No Codex executable found; identity continues. Use --codex-bin to enable quota.\n");
         [NSApplication.sharedApplication setActivationPolicy:NSApplicationActivationPolicyProhibited];
-        IdentityBridge *bridge = [[IdentityBridge alloc] initWithHostID:hostID codexBin:quotaEnabled ? codexBin : nil];
+        IdentityBridge *bridge = [[IdentityBridge alloc] initWithHostID:hostID directory:directory codexBin:quotaEnabled ? codexBin : nil];
         [bridge start];
         [NSRunLoop.mainRunLoop run];
         close(runFD);

@@ -33,8 +33,9 @@ temporary directory. The `sign` target is an alias for this packaging workflow.
 Use the ZIP as the deliverable. The intermediate `build/CodexHostIdentity.app`
 inside Documents can acquire iCloud/File Provider metadata after compilation or
 signing, which makes strict signature checks fail. Its signature is not the
-packaged-app verification result. `make test` checks Unicode-safe identity encoding, file
-permissions/persistence, quota selection and malformed inputs, and four local
+packaged-app verification result. `make test` checks Unicode-safe identity encoding,
+alias persistence and validation, unchanged UUIDs when renaming, file permissions,
+unsafe file paths, quota selection and malformed inputs, and four local
 fake app-server scenarios. Tests neither connect to hardware nor start real
 Codex, request permissions, read credentials, or create the real host identity.
 
@@ -91,11 +92,42 @@ System Settings > General > Login Items. This repository does not install a Laun
 Login Items automatically. Rebuilding an ad-hoc signed app may require renewing
 its Bluetooth permission.
 
+## Choose a short display name
+
+Use the following commands on the corresponding Mac after installing a helper
+version that supports aliases. For example, use `Mac P` on the private Mac and
+`Mac W` on the work Mac; choose the role yourself before setting its label.
+
+```sh
+# Set this Mac's label and exit. On the work Mac, use --name "Mac W" instead.
+"$HOME/Applications/CodexHostIdentity.app/Contents/MacOS/codex-host-identity" --name "Mac P"
+
+# Query the effective name and whether it comes from an alias or LocalHostName.
+"$HOME/Applications/CodexHostIdentity.app/Contents/MacOS/codex-host-identity" --show-name
+# Example: {"name":"Mac P","source":"alias"}
+
+# Restore the default macOS LocalHostName and exit.
+"$HOME/Applications/CodexHostIdentity.app/Contents/MacOS/codex-host-identity" --clear-name
+```
+
+These commands do not connect to Bluetooth or USB, start a Codex app-server, or
+create/change the host UUID. They can run alongside the updated helper: it reads
+the saved name for each identity announcement, normally within five seconds when
+connected. Updating an older installed helper still requires the normal app
+replacement and manual launch. The name commands themselves do not install or
+restart anything. The native Codex app and Friday Companion need no changes.
+
+Names must fit in 31 UTF-8 bytes and arrive unchanged in the identity JSON. Empty
+names, surrounding whitespace, control characters, invalid UTF-8, and names too
+long after JSON escaping are rejected, leaving the previous alias intact. The
+saved label is independent of the Mac's system name, UUID, and selected-host
+preference. Each name command is used alone, without startup options.
+
 ## Protocol
 
 | Path | Payload | Limits |
 | --- | --- | --- |
-| BLE identity service `7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C04`, characteristic `...5C03` | `{"version":1,"hostId":"generated-uuid","name":"LocalHostName"}` | Write with response; firmware requires encryption; JSON shorter than 128 bytes |
+| BLE identity service `7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C04`, characteristic `...5C03` | `{"version":1,"hostId":"generated-uuid","name":"Mac P"}` | Configured alias or default LocalHostName; write with response; firmware requires encryption; JSON shorter than 128 bytes |
 | USB HID feature report 7 | Same identity JSON, followed by NUL padding | 128-byte body; macOS buffer is report-ID byte plus body, 129 bytes total |
 | USB HID feature report 8 | Quota JSON, followed by NUL padding | 256-byte body; macOS buffer is 257 bytes total |
 | BLE quota service `...5C01`, characteristic `...5C02` | Same quota JSON, without padding | Used when no USB identity report is being delivered |
@@ -127,9 +159,16 @@ The UUID is generated locally once and stored with mode `0600` in:
 ~/Library/Application Support/Friday/Codex Host Identity/host-id
 ```
 
-The containing directory is private (`0700`). Identity survives helper/app
-updates. The displayed name follows macOS `LocalHostName`, shortened to 31 UTF-8
-bytes without splitting Unicode characters. Separate macOS user accounts keep
+The containing directory is private (`0700`). An optional alias is stored in
+`display-name` beside `host-id`, with mode `0600`, an atomic replacement, and a
+separate lock. Symlinks, hard links, and files owned by another user are rejected.
+If the alias file is invalid, the helper reports the error and pauses identity
+announcements until `--name` or `--clear-name` repairs it. It does not silently
+substitute a different label.
+
+Identity and aliases survive helper/app updates. With no alias, the displayed
+name follows macOS `LocalHostName`, shortened to 31 UTF-8 bytes without splitting
+Unicode characters. Separate macOS user accounts keep
 separate identities. Do not copy the identity file to another Mac. If it is
 corrupted, restore it from a local backup; the helper refuses to silently create
 a replacement because that would change remembered device selection. These

@@ -3,6 +3,7 @@
 #include <apps/app_codex_micro/view/view.h>
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -73,6 +74,47 @@ lv_obj_t* findLabel(lv_obj_t* root, const char* text)
     return nullptr;
 }
 
+struct ArcStrings {
+    std::string host;
+    std::string transport;
+    std::string battery;
+};
+
+void inspectArcLabels(lv_obj_t* root, ArcStrings& strings)
+{
+    const int32_t rotation = lv_obj_get_style_transform_rotation(root, LV_PART_MAIN);
+    if (lv_obj_check_type(root, &lv_label_class) && rotation != 0 &&
+        !lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN)) {
+        const auto* font = lv_obj_get_style_text_font(root, LV_PART_MAIN);
+        auto& text = rotation < 0 ? strings.host : font == &lv_font_montserrat_18 ? strings.transport : strings.battery;
+        text += lv_label_get_text(root);
+        // Check the entire transformed glyph box against the real circular
+        // display, so a passing rectangular render cannot conceal clipped text.
+        lv_area_t area;
+        lv_obj_get_coords(root, &area);
+        const float pivotX = area.x1 + lv_obj_get_style_transform_pivot_x(root, LV_PART_MAIN);
+        const float pivotY = area.y1 + lv_obj_get_style_transform_pivot_y(root, LV_PART_MAIN);
+        const float angle = rotation * 3.14159265358979323846f / 1800.0f;
+        for (const int x : {area.x1, area.x2}) {
+            for (const int y : {area.y1, area.y2}) {
+                const float transformedX = pivotX + (x - pivotX) * std::cos(angle) - (y - pivotY) * std::sin(angle);
+                const float transformedY = pivotY + (x - pivotX) * std::sin(angle) + (y - pivotY) * std::cos(angle);
+                assert(std::hypot(transformedX - 233, transformedY - 233) < 233);
+            }
+        }
+    }
+    for (uint32_t i = 0; i < lv_obj_get_child_count(root); ++i) {
+        inspectArcLabels(lv_obj_get_child(root, i), strings);
+    }
+}
+
+ArcStrings arcStrings()
+{
+    ArcStrings result;
+    inspectArcLabels(lv_screen_active(), result);
+    return result;
+}
+
 void save(const std::filesystem::path& directory, const char* name)
 {
     lv_obj_invalidate(lv_screen_active());
@@ -88,7 +130,7 @@ void save(const std::filesystem::path& directory, const char* name)
 DashboardModel previewModel()
 {
     DashboardModel model;
-    model.connectionText = "Office Mac";
+    model.connectionText = "Mac W";
     model.transportText = "USB";
     model.connectionColor = 0x77E6A5;
     model.batteryText = "BAT 82% +";
@@ -132,6 +174,9 @@ int main(int argc, char** argv)
     auto model = previewModel();
     view.update(model);
     save(output, "dashboard");
+    assert(arcStrings().host == "Mac W");
+    assert(arcStrings().transport == "USB");
+    assert(arcStrings().battery == "82%+");
 
     // A1 retains the original position and hit area; connection metadata must
     // not cover it or turn a normal agent tap into a device-picker action.
@@ -141,13 +186,26 @@ int main(int argc, char** argv)
     assert(view.popIntent(intent) && intent.type == TouchIntentType::AgentRelease && intent.agent == 0);
     assert(!view.popIntent(intent));
 
-    auto* connectionName = findLabel(lv_screen_active(), model.connectionText.c_str());
+    // Original circle-edge taps adjacent to the metadata still reach exactly
+    // their agent, including the portion overlapped by the picker rectangle.
+    for (const auto& point : std::array<std::array<int, 3>, 3>{{{178, 72, 0}, {100, 101, 5}, {375, 100, 1}}}) {
+        tap(point[0], point[1]);
+        const bool received = view.popIntent(intent);
+        if (!received || intent.type != TouchIntentType::AgentPress || intent.agent != point[2]) {
+            std::fprintf(stderr, "Edge tap %d,%d expected A%d received=%d type=%d agent=%d menu=%d\n",
+                         point[0], point[1], point[2] + 1, received, static_cast<int>(intent.type), intent.agent,
+                         view.deviceMenuOpen());
+        }
+        assert(received && intent.type == TouchIntentType::AgentPress && intent.agent == point[2]);
+        assert(view.popIntent(intent) && intent.type == TouchIntentType::AgentRelease && intent.agent == point[2]);
+        assert(!view.popIntent(intent));
+        assert(!view.deviceMenuOpen());
+    }
+
+    auto* connectionName = findLabel(lv_screen_active(), "M");
     assert(connectionName != nullptr);
-    const auto tapConnection = [connectionName] {
-        lv_area_t area;
-        lv_obj_get_coords(lv_obj_get_parent(connectionName), &area);
-        tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
-    };
+    assert(lv_obj_get_style_transform_rotation(connectionName, LV_PART_MAIN) < -200);
+    const auto tapConnection = [] { tap(133, 52); };
     tapConnection();
     assert(view.deviceMenuOpen());
     assert(view.popIntent(intent) && intent.type == TouchIntentType::DeviceMenuOpened);
@@ -208,21 +266,37 @@ int main(int argc, char** argv)
     assert(view.popIntent(intent) && intent.type == TouchIntentType::SendRelease);
     assert(!view.popIntent(intent));
 
-    model.connectionText = "Very Long Office MacBook Name";
     model.transportText = "Offline";
     model.connectionColor = 0xFF7685;
     view.update(model);
+    save(output, "dashboard-offline");
+    assert(arcStrings().transport == "Offline");
+    model.connectionText = "Very Long Office MacBook Name";
+    view.update(model);
     save(output, "dashboard-offline-long-name");
-    // DOT mode replaces the displayed tail in LVGL's text buffer; the label
-    // itself must remain one line and leave its separate status visible.
-    assert(lv_obj_get_height(connectionName) == lv_font_get_line_height(&lv_font_montserrat_14));
-    assert(findLabel(lv_obj_get_parent(connectionName), "Offline") != nullptr);
+    // Arc labels keep each glyph on one line and truncate the original name
+    // inside its own wedge; Offline remains fully spelled out on the right.
+    assert(lv_obj_get_height(connectionName) == lv_font_get_line_height(&lv_font_montserrat_18) + 2);
+    assert(findLabel(lv_screen_active(), ".") != nullptr);
+    assert(findLabel(lv_screen_active(), "O") != nullptr);
+    assert(arcStrings().host.size() < model.connectionText.size());
+    assert(arcStrings().host.substr(arcStrings().host.size() - 3) == "...");
+    assert(arcStrings().transport == "Offline");
+
+    model.connectionText = "Mac P";
+    model.transportText = "BLE";
+    model.batteryText = "BAT 100%";
+    view.update(model);
+    save(output, "dashboard-ble");
+    assert(arcStrings().host == "Mac P");
+    assert(arcStrings().transport == "BLE");
+    assert(arcStrings().battery == "100%");
 
     model.hosts.clear();
     view.update(model);
     tapConnection();
     assert(view.deviceMenuOpen());
     save(output, "devices-empty");
-    std::puts("LVGL host picker: real pointer input, modal isolation, offline selection, scroll and old-touch cancellation PASS");
+    std::puts("LVGL host picker: circular text bounds, original agent touch edges, real pointer input, modal isolation, offline selection, scroll and old-touch cancellation PASS");
     return 0;
 }

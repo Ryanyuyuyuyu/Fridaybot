@@ -15,11 +15,16 @@ same output directory makes subsequent builds incremental.
 The executable uses real LVGL pointer input to check opening and closing the
 menu, choosing an offline host by stable ID, and canceling a held touch across a
 route change. It also checks delayed control callbacks cannot bypass the modal,
-scrolling works, and the transport label remains separate from long host names.
+scrolling works, and original A1/A2/A6 edge taps cannot open the device menu.
+Every rotated character's transformed bounds must remain inside the circular
+screen. Short aliases, long-name truncation, USB/BLE/Offline labels, and compact
+battery text with its charging mark are checked separately.
 Assertions remain enabled for release builds.
 
-Five 466 × 466 PPM frames show the dashboard, offline long name, populated list,
-scrolled list, and empty list. On macOS the runner also creates PNG copies. The
+Seven 466 × 466 PPM frames show USB and BLE dashboards, offline short and long
+names, populated list, scrolled list, and empty list. The Mac P/W preview labels
+are explicit synthetic fixtures; the view never assigns a private/work role to
+a real host. On macOS the runner also creates PNG copies. The
 grey corners indicate the area outside the circular hardware display.
 
 This test opens no desktop window, serial port, Bluetooth session, or hardware

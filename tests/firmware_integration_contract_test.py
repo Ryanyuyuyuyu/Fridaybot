@@ -407,9 +407,9 @@ def test_codex_ui_source_fingerprint(root: Path, contract: Contract) -> None:
         "main/apps/app_codex_micro/app_codex_micro.h":
             "d28e3cf1caa41d73627f264c0ac15a0a456937a09d022b5567cf9f57643cec1f",
         "main/apps/app_codex_micro/view/view.cpp":
-            "124a16f689fb7f8525abd22c2a69245732239df151ff2add72d10c38454c7c9e",
+            "a4cdee0ae40c76aec2fc502388b78b459329fe48ba124b3008ba9d171ccd6fa9",
         "main/apps/app_codex_micro/view/view.h":
-            "b2d6a85844074c30b0071d96d99e22d3d3bee7ee9f12bed20e59c6b31c44654d",
+            "845e46f8d7119fc74ebe60154617dd0ecc4153ea045dab9e1abdce5e95cdcbcb",
     }
     for relative, digest in expected.items():
         contract.require(

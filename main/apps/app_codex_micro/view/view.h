@@ -75,6 +75,12 @@ public:
     void showSelectionError();
 
 private:
+    struct ArcText {
+        std::array<lv_obj_t*, 16> glyphs = {};
+        std::string text;
+        uint32_t color = 0;
+    };
+
     struct LimitIndicator {
         lv_obj_t* arc           = nullptr;
         lv_obj_t* highlight     = nullptr;
@@ -108,6 +114,7 @@ private:
     static void applySendPulseAnimationValue(void* context, int32_t value);
     static void handleTouchEvent(lv_event_t* event);
     static void handleCircleHitTest(lv_event_t* event);
+    static void handleConnectionHitTest(lv_event_t* event);
     static void handleGestureEvent(lv_event_t* event);
     static void handleDeviceMenuEvent(lv_event_t* event);
     static void handleHostEvent(lv_event_t* event);
@@ -118,16 +125,17 @@ private:
     void playSendPulse();
     void restoreSendPulseVisuals();
     void enqueueIntent(const TouchIntent& intent);
+    void updateArcText(ArcText& arc, const std::string& text, const lv_font_t* font, float radius,
+                       float angle, int32_t maxWidth, uint32_t color);
 
     lv_obj_t* _root             = nullptr;
-    lv_obj_t* _connection_label = nullptr;
-    lv_obj_t* _transport_label = nullptr;
     lv_obj_t* _connection_button = nullptr;
-    lv_obj_t* _connection_dot = nullptr;
+    ArcText _connection_text;
+    ArcText _transport_text;
+    ArcText _battery_text;
     lv_obj_t* _device_overlay = nullptr;
     lv_obj_t* _device_list = nullptr;
     lv_obj_t* _device_menu_message = nullptr;
-    lv_obj_t* _battery_label    = nullptr;
     lv_obj_t* _quota_button     = nullptr;
     lv_obj_t* _quota_label      = nullptr;
     lv_obj_t* _reset_label      = nullptr;
