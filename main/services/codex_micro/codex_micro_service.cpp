@@ -8,6 +8,8 @@
 #include "apps/app_friday/context_link.h"
 #include "services/codex_micro/codex_micro_gatt_db.h"
 #include "services/codex_micro/usb_transport.h"
+#include "services/codex_micro/usb_write.h"
+#include "services/codex_micro/usb_resume_policy.h"
 #include "services/codex_micro/ble_sessions.h"
 
 #include <ArduinoJson.h>
@@ -199,7 +201,9 @@ enum class TableId : uint8_t {
     kBattery    = 2,
     kQuota      = 3,
     kFriday     = 4,
-    kCount      = 5,
+    // Append only: original table order/counts preserve paired Friday handles.
+    kHostIdentity = 5,
+    kCount      = 6,
 };
 
 constexpr uint8_t toIndex(TableId id)
@@ -333,7 +337,7 @@ struct Service::Impl {
     Connection usbConnection{};
     uint32_t usbEpoch = 0;
     uint32_t usbReconnectAtMs = 0;
-    std::string usbResumePreference;
+    usb::ResumePreference usbResumePreference;
     std::array<Connection, kMaxConnections> connections{};
     esp_gatt_if_t gattsIf                          = ESP_GATT_IF_NONE;
     uint16_t deviceInfoHandles[detail::kDiCount]   = {};
@@ -341,6 +345,7 @@ struct Service::Impl {
     uint16_t batteryHandles[detail::kBatteryCount] = {};
     uint16_t quotaHandles[detail::kQuotaCount]     = {};
     uint16_t fridayHandles[detail::kFridayCount]   = {};
+    uint16_t hostIdentityHandles[detail::kHostIdentityCount] = {};
     std::array<bool, toIndex(TableId::kCount)> servicesStarted{};
     bool advertisingDataPending   = false;
     bool scanResponsePending      = false;
@@ -692,6 +697,7 @@ void Service::Impl::acceptHostIdentity(Connection& connection, const uint8_t* by
             }
         }
     } else {
+        usbResumePreference.identityConfirmed(id);
         registerHost(connection);
     }
     refreshRouting();
@@ -703,9 +709,9 @@ void Service::Impl::registerHost(Connection& connection)
         connection.hostId.empty()) return;
     const bool accepted = hostSelection.registerReady(connection.id, connection.usb ? Transport::Usb : Transport::Ble,
                                                       connection.hostId, connection.hostName, connection.legacyIdentity);
-    if (accepted && connection.usb && !usbResumePreference.empty()) {
-        hostSelection.selectHost(usbResumePreference);
-        usbResumePreference.clear();
+    if (accepted && connection.usb) {
+        const std::string preference = usbResumePreference.takeForReadyHost(connection.hostId);
+        if (!preference.empty()) hostSelection.selectHost(preference);
     }
 }
 
@@ -818,11 +824,11 @@ bool Service::Impl::processUsb()
         usb::connect();
     }
     usb::Event event{};
-    for (size_t count = 0; count < 16 && usb::poll(event); ++count) {
+    for (size_t count = 0; count < 16 && usb::serviceBudgetAvailable() && usb::poll(event); ++count) {
         worked = true;
         if (event.type == usb::EventType::Mounted) {
             if (event.epoch != usb::sessionEpoch() || !usb::mounted()) continue;
-            usbResumePreference = event.resumed ? hostSelection.preferredHostId() : std::string{};
+            usbResumePreference.mounted(event.resumed, hostSelection.preferredHostId());
             usbConnection = Connection{};
             hostSelection.disconnect(kUsbConnectionId);
             refreshRouting();
@@ -965,6 +971,7 @@ void Service::Impl::worker()
 
     ESP_LOGI(kTag, "BLE worker running");
     while (true) {
+        usb::beginServiceCycle();
         bool didWork = processUsb();
         ControlEvent control{};
         for (size_t count = 0; count < kControlQueueDepth && xQueueReceive(controlQueue, &control, 0) == pdTRUE;
@@ -1542,6 +1549,10 @@ void Service::Impl::createTable(TableId id)
             table = detail::kFridayDb;
             count = detail::kFridayCount;
             break;
+        case TableId::kHostIdentity:
+            table = detail::kHostIdentityDb;
+            count = detail::kHostIdentityCount;
+            break;
         case TableId::kCount:
             return;
     }
@@ -1592,8 +1603,8 @@ void Service::Impl::handleServiceStarted(const ControlEvent& event)
     servicesStarted[toIndex(id)] = true;
     if (std::all_of(servicesStarted.begin(), servicesStarted.end(), [](bool value) { return value; })) {
         configureAdvertising();
-        ESP_LOGI(kTag, "BLE GATT ready VID=%04X PID=%04X report=%u services=5", Service::kVendorId, Service::kProductId,
-                 Service::kReportId);
+        ESP_LOGI(kTag, "BLE GATT ready VID=%04X PID=%04X report=%u services=%u", Service::kVendorId, Service::kProductId,
+                 Service::kReportId, toIndex(TableId::kCount));
     }
 }
 
@@ -1818,7 +1829,7 @@ void Service::Impl::processWrite(const WriteEvent& write)
         ESP_LOGW(kTag, "unencrypted write rejected id=%u handle=%u", write.connId, write.handle);
         return;
     }
-    if (write.handle == quotaHandles[detail::kHostIdentityValue]) {
+    if (write.handle == hostIdentityHandles[detail::kHostIdentityValue]) {
         if (write.offset == 0) acceptHostIdentity(*connection, write.data, write.length);
         return;
     }
@@ -2154,8 +2165,7 @@ void Service::Impl::processCommand(const Command& command)
         command.controlEpoch != controlEpoch.load(std::memory_order_acquire)) return;
     switch (command.type) {
         case CommandType::kSelectHost:
-            if (!usbResumePreference.empty()) usbResumePreference = command.hostId;
-            hostSelection.selectHost(command.hostId);
+            if (hostSelection.selectHost(command.hostId)) usbResumePreference.manuallySelected(command.hostId);
             refreshRouting();
             break;
         case CommandType::kBattery:
@@ -2544,6 +2554,17 @@ bool Service::Impl::sendJsonToConnection(const std::string& framed, Connection& 
         connection.mtu < detail::kReportBodySize + 3) {
         return false;
     }
+    if (connection.usb) {
+        if (!usb::serviceBudgetAvailable()) return false;
+        return usb::sendFramedMessage(framed.data(), framed.size(),
+            [this, &connection](const uint8_t* report) { return sendReport(report, connection); },
+            [this] {
+                // Do not let a half-written RPC contaminate a later response.
+                // Re-enumeration also cancels old held controls at the host.
+                usb::disconnect();
+                usbReconnectAtMs = nowMs() + 150;
+            });
+    }
     for (size_t offset = 0; offset < framed.size();) {
         const size_t chunk                      = std::min(detail::kPayloadSize, framed.size() - offset);
         uint8_t report[detail::kReportBodySize] = {};
@@ -2685,6 +2706,8 @@ uint16_t* Service::Impl::handlesFor(TableId id)
             return quotaHandles;
         case TableId::kFriday:
             return fridayHandles;
+        case TableId::kHostIdentity:
+            return hostIdentityHandles;
         case TableId::kCount:
             return nullptr;
     }
@@ -2704,6 +2727,8 @@ size_t Service::Impl::handleCountFor(TableId id) const
             return detail::kQuotaCount;
         case TableId::kFriday:
             return detail::kFridayCount;
+        case TableId::kHostIdentity:
+            return detail::kHostIdentityCount;
         case TableId::kCount:
             return 0;
     }
@@ -2723,6 +2748,8 @@ uint16_t Service::Impl::serviceHandleFor(TableId id) const
             return quotaHandles[detail::kQuotaService];
         case TableId::kFriday:
             return fridayHandles[detail::kFridayService];
+        case TableId::kHostIdentity:
+            return hostIdentityHandles[detail::kHostIdentityService];
         case TableId::kCount:
             return 0;
     }

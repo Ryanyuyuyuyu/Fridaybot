@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "usb_transport.h"
+#include "usb_write.h"
 #include "sdkconfig.h"
 
 #if CONFIG_CODEX_MICRO_USB_HID
@@ -39,6 +40,7 @@ uint32_t epoch = 0;
 bool linkMounted = false;
 bool started = false;
 bool intentionallyDisconnected = false;
+bool resumeOnNextMount = false;
 bool mountDelivered = false;
 bool mountedByResume = false;
 struct PendingTx {
@@ -52,6 +54,7 @@ struct PendingTx {
 };
 PendingTx tx;
 uint32_t nextTxToken = 0;
+WriteBudget writeBudget;
 
 // Receive/lifecycle callbacks only update this bounded queue; they never parse
 // JSON or wait for locks owned by the service task. SOF separately services the
@@ -62,6 +65,10 @@ void linkChanged(bool nowMounted, bool resumed = false)
     if (nowMounted && intentionallyDisconnected) {
         portEXIT_CRITICAL(&queueMux);
         return;
+    }
+    if (nowMounted) {
+        resumed = resumed || resumeOnNextMount;
+        resumeOnNextMount = false;
     }
     linkMounted = nowMounted;
     mountDelivered = false;
@@ -207,10 +214,16 @@ uint32_t sessionEpoch()
     return result;
 }
 
+void beginServiceCycle() { writeBudget.start(esp_timer_get_time()); }
+bool serviceBudgetAvailable() { return writeBudget.available(esp_timer_get_time()); }
+
 bool sendReport(const uint8_t* body, size_t size, uint32_t expectedEpoch)
 {
     if (!started || !body || size != kRpcBodySize || !mounted() || sessionEpoch() != expectedEpoch) return false;
-    const int64_t deadline = esp_timer_get_time() + 100000;
+    // This deadline is shared across the entire worker iteration. A long RPC
+    // ID or a backlog of requests cannot multiply the wait by fragment count.
+    const int64_t deadline = writeBudget.deadline();
+    if (esp_timer_get_time() >= deadline) return false;
     portENTER_CRITICAL(&queueMux);
     if (!linkMounted || intentionallyDisconnected || epoch != expectedEpoch) {
         portEXIT_CRITICAL(&queueMux);
@@ -238,13 +251,14 @@ bool sendReport(const uint8_t* body, size_t size, uint32_t expectedEpoch)
         accepted = sameRequest && sameSession && complete && tx.accepted;
         portEXIT_CRITICAL(&queueMux);
         if (!sameRequest || !sameSession || complete) break;
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(1);
     } while (esp_timer_get_time() < deadline);
 
     // Only this single producer enables/disables SOF. A late callback cannot
     // disable a newer request or publish its completion into the next token.
     portENTER_CRITICAL(&queueMux);
     if (tx.token == token) {
+        accepted = tx.complete && tx.accepted && epoch == expectedEpoch && linkMounted && !intentionallyDisconnected;
         tx.pending = false;
         tx.token = ++nextTxToken;
     }
@@ -300,6 +314,10 @@ void disconnect()
     if (!started) return;
     portENTER_CRITICAL(&queueMux);
     intentionallyDisconnected = true;
+    // A software reset must not claim priority again over a manually chosen
+    // Mac. The service compares stable identities in case the cable moved
+    // while disconnected; a different Mac still gets normal USB priority.
+    resumeOnNextMount = true;
     portEXIT_CRITICAL(&queueMux);
     linkChanged(false);
     tud_disconnect();
@@ -375,6 +393,8 @@ bool begin() { return false; }
 bool poll(Event&) { return false; }
 bool mounted() { return false; }
 uint32_t sessionEpoch() { return 0; }
+void beginServiceCycle() {}
+bool serviceBudgetAvailable() { return false; }
 bool sendReport(const uint8_t*, size_t, uint32_t) { return false; }
 void disconnect() {}
 void connect() {}

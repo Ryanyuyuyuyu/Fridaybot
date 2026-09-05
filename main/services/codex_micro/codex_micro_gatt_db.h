@@ -29,6 +29,12 @@ inline uint8_t kQuotaWriteUuid[ESP_UUID_LEN_128] = {
 inline uint8_t kHostIdentityUuid[ESP_UUID_LEN_128] = {
     0x03, 0x5c, 0x0e, 0x1a, 0xf6, 0x4e, 0xbe, 0xbf, 0x71, 0x4a, 0xc2, 0x2a, 0x66, 0x4e, 0x0d, 0x7f,
 };
+// Append this service after the five original tables. Never insert attributes
+// into Quota/Friday: paired Macs cache their existing absolute GATT handles.
+// Canonical service UUID: 7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C04.
+inline uint8_t kHostIdentityServiceUuid[ESP_UUID_LEN_128] = {
+    0x04, 0x5c, 0x0e, 0x1a, 0xf6, 0x4e, 0xbe, 0xbf, 0x71, 0x4a, 0xc2, 0x2a, 0x66, 0x4e, 0x0d, 0x7f,
+};
 // Canonical UUIDs, stored in the Bluetooth little-endian byte order used by
 // ESP-IDF/Bluedroid:
 //   46524944-4159-0001-8000-00805F9B34FB (Friday service)
@@ -111,8 +117,6 @@ enum QuotaIndex : uint8_t {
     kQuotaService,
     kQuotaDeclaration,
     kQuotaValue,
-    kHostIdentityDeclaration,
-    kHostIdentityValue,
     kQuotaCount,
 };
 
@@ -129,6 +133,13 @@ enum FridayIndex : uint8_t {
     kFridayCapsuleAckDeclaration,
     kFridayCapsuleAckValue,
     kFridayCount,
+};
+
+enum HostIdentityIndex : uint8_t {
+    kHostIdentityService,
+    kHostIdentityDeclaration,
+    kHostIdentityValue,
+    kHostIdentityCount,
 };
 
 inline uint16_t kPrimaryServiceUuid            = ESP_GATT_UUID_PRI_SERVICE;
@@ -270,10 +281,6 @@ inline const esp_gatts_attr_db_t kQuotaDb[kQuotaCount] = {
     CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyWrite), sizeof(kPropertyWrite),
                  &kPropertyWrite),
     CODEX_ATTR128(kQuotaWriteUuid, ESP_GATT_PERM_WRITE_ENCRYPTED, sizeof(kQuotaInitialValue), 0, kQuotaInitialValue),
-    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyWrite), sizeof(kPropertyWrite),
-                 &kPropertyWrite),
-    CODEX_ATTR128(kHostIdentityUuid, ESP_GATT_PERM_WRITE_ENCRYPTED, sizeof(kHostIdentityInitialValue), 0,
-                  kHostIdentityInitialValue),
 };
 
 inline const esp_gatts_attr_db_t kFridayDb[kFridayCount] = {
@@ -302,6 +309,15 @@ inline const esp_gatts_attr_db_t kFridayDb[kFridayCount] = {
                   0, kFridayCapsuleAckInitialValue),
 };
 
+inline const esp_gatts_attr_db_t kHostIdentityDb[kHostIdentityCount] = {
+    CODEX_ATTR16(&kPrimaryServiceUuid, ESP_GATT_PERM_READ, sizeof(kHostIdentityServiceUuid),
+                 sizeof(kHostIdentityServiceUuid), kHostIdentityServiceUuid),
+    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyWrite), sizeof(kPropertyWrite),
+                 &kPropertyWrite),
+    CODEX_ATTR128(kHostIdentityUuid, ESP_GATT_PERM_WRITE_ENCRYPTED, sizeof(kHostIdentityInitialValue), 0,
+                  kHostIdentityInitialValue),
+};
+
 #undef CODEX_ATTR16
 #undef CODEX_ATTR128
 
@@ -323,6 +339,9 @@ static_assert(sizeof(kAdvertisingData) <= 31);
 static_assert(sizeof(kScanResponseData) <= 31);
 static_assert(sizeof(kReportMap) == 29);
 static_assert(sizeof(kInputReport) == kReportBodySize);
+// Existing bonded Friday/Codex Macs must retain all five original handle ranges.
+static_assert(kDiCount == 5 && kHidCount == 16 && kBatteryCount == 5 && kQuotaCount == 3 && kFridayCount == 11);
+static_assert(kHostIdentityCount == 3);
 static_assert(static_cast<uint8_t>(kFridayCount) <= static_cast<uint8_t>(kHidCount));
 
 }  // namespace codex_micro::detail

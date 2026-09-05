@@ -34,6 +34,13 @@ compile_and_run usb_disabled_test \
 compile_and_run usb_descriptor_test \
     "$test_repo_root/tests/usb_descriptor_test.cpp"
 
+compile_and_run usb_write_test \
+    "$test_repo_root/tests/usb_write_test.cpp"
+
+compile_and_run usb_resume_policy_test \
+    "$test_repo_root/tests/usb_resume_policy_test.cpp" \
+    "$test_repo_root/main/services/codex_micro/host_selection.cpp"
+
 compile_and_run face_model_test \
     "$test_repo_root/tests/face_model_test.cpp" \
     "$test_repo_root/main/apps/app_friday/face_model.cpp"
@@ -53,3 +60,4 @@ compile_and_run context_link_bridge_test \
     "$test_repo_root/main/apps/app_friday/context_link.cpp"
 
 "$test_python" "$test_repo_root/tests/firmware_integration_contract_test.py" "$test_repo_root"
+"$test_python" "$test_repo_root/tests/gatt_handle_compatibility_test.py" "$test_repo_root"

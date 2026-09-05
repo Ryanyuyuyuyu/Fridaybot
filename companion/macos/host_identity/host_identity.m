@@ -20,6 +20,7 @@ static const NSUInteger kNameByteLimit = 31;
 static CBUUID *ServiceUUID(void) { return [CBUUID UUIDWithString:@"7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C01"]; }
 static CBUUID *QuotaUUID(void) { return [CBUUID UUIDWithString:@"7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C02"]; }
 static CBUUID *IdentityUUID(void) { return [CBUUID UUIDWithString:@"7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C03"]; }
+static CBUUID *IdentityServiceUUID(void) { return [CBUUID UUIDWithString:@"7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C04"]; }
 
 static NSError *Failure(NSString *message)
 {
@@ -141,6 +142,7 @@ static NSString *LoadIdentity(NSURL *directory, NSError **error)
 @property(nonatomic) BOOL pending;
 @property(nonatomic) BOOL reportedReady;
 @property(nonatomic) BOOL closing;
+@property(nonatomic) BOOL requestedIdentityService;
 @end
 @implementation BLESession
 @end
@@ -408,14 +410,26 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     BLESession *session = _sessions[peripheral.identifier];
     if (!session || session.closing) return;
     if (error) { fprintf(stderr, "[BLE] Service discovery: %s\n", error.localizedDescription.UTF8String); [self closeSession:session]; return; }
+    CBService *identityService = nil, *quotaService = nil;
     for (CBService *service in peripheral.services) {
-        if ([service.UUID isEqual:ServiceUUID()]) {
-            [peripheral discoverCharacteristics:@[IdentityUUID(), QuotaUUID()] forService:service];
-            return;
-        }
+        if ([service.UUID isEqual:IdentityServiceUUID()]) identityService = service;
+        if ([service.UUID isEqual:ServiceUUID()]) quotaService = service;
     }
-    puts("[BLE] Identity service absent; waiting for compatible firmware.");
-    [self closeSession:session];
+    if (!identityService && !session.requestedIdentityService) {
+        // The identity service is appended after the five original services.
+        // Ask for it explicitly if an initial discovery returned a cached list.
+        session.requestedIdentityService = YES;
+        [peripheral discoverServices:@[IdentityServiceUUID(), ServiceUUID()]];
+        return;
+    }
+    if (!identityService) {
+        puts("[BLE] Appended identity service unavailable; waiting for compatible firmware/discovery.");
+        [self closeSession:session];
+        return;
+    }
+    [peripheral discoverCharacteristics:@[IdentityUUID()] forService:identityService];
+    if (quotaService) [peripheral discoverCharacteristics:@[QuotaUUID()] forService:quotaService];
+    else puts("[BLE] Quota service unavailable; host identity remains usable.");
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didDiscoverCharacteristicsForService:(CBService *)service error:(NSError *)error
@@ -423,15 +437,23 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     BLESession *session = _sessions[peripheral.identifier];
     if (!session || session.closing) return;
     if (error) { fprintf(stderr, "[BLE] Characteristic discovery: %s\n", error.localizedDescription.UTF8String); [self closeSession:session]; return; }
-    for (CBCharacteristic *characteristic in service.characteristics) {
-        if ([characteristic.UUID isEqual:IdentityUUID()] && (characteristic.properties & CBCharacteristicPropertyWrite)) {
-            session.identity = characteristic;
+    if ([service.UUID isEqual:IdentityServiceUUID()]) {
+        for (CBCharacteristic *characteristic in service.characteristics) {
+            if ([characteristic.UUID isEqual:IdentityUUID()] && (characteristic.properties & CBCharacteristicPropertyWrite)) {
+                session.identity = characteristic;
+            }
         }
-        if ([characteristic.UUID isEqual:QuotaUUID()] && (characteristic.properties & CBCharacteristicPropertyWrite)) session.quota = characteristic;
+        if (session.identity) { [self sendBLE:session payload:[self payload]]; return; }
+        puts("[BLE] Identity characteristic absent from the appended service; firmware update required.");
+        [self closeSession:session];
+    } else if ([service.UUID isEqual:ServiceUUID()]) {
+        for (CBCharacteristic *characteristic in service.characteristics) {
+            if ([characteristic.UUID isEqual:QuotaUUID()] && (characteristic.properties & CBCharacteristicPropertyWrite)) {
+                session.quota = characteristic;
+            }
+        }
+        if (!session.quota) puts("[BLE] Quota characteristic unavailable; host identity remains usable.");
     }
-    if (session.identity) { [self sendBLE:session payload:[self payload]]; return; }
-    puts("[BLE] Identity characteristic absent; firmware update or Bluetooth re-pair may be required.");
-    [self closeSession:session];
 }
 
 - (void)sendBLE:(BLESession *)session payload:(NSData *)data

@@ -30,9 +30,16 @@ Queue overflow emits an explicit event for RPC resynchronization.
 
 Outbound reports carry the service's accepted session epoch. A single pending
 report is submitted on the TinyUSB task through its Start Of Frame callback,
-serializing the final session check with USB lifecycle events. The caller waits
-at most 100 ms and cancels the request token on timeout. This prevents a command
-queued for the old USB host from following a newly enumerated host.
+serializing the final session check with USB lifecycle events. Every USB write
+in one shared service-worker iteration uses the same 8 ms deadline, including
+all fragments and requests. The final RTOS wait may add one tick (1 ms in this
+build). A timeout cancels its request token; any failed attempted write
+disconnects USB before a later message can reuse a partial stream or leave an
+uncertain single-report key press held. A call rejected before attempting a
+write because the cycle budget is already empty does not disconnect USB.
+This bounds USB congestion without blocking Friday's BLE audio queue for a
+full sequence of per-report timeouts, and prevents an old host's command from
+following a newly enumerated host.
 
 ## Build separately
 
@@ -71,7 +78,11 @@ device and rollback image before performing any firmware write.
 
 This board is battery powered and this integration has no dedicated VBUS sense
 GPIO. USB suspend therefore makes the USB endpoint unavailable; resume starts
-a fresh session. This deliberately treats host sleep and cable removal as
+a fresh session. Wake and software recovery retain a manual host choice only
+after the new session confirms the same stable host ID. A different Mac connected
+during recovery receives normal USB priority; repeated recovery before identity
+arrives retains the previous comparison ID. A normal new attachment receives USB
+priority after its identity and RPC handshake. This deliberately treats host sleep and cable removal as
 loss of the usable transport. Actual suspend/resume and unplug behavior still
 requires hardware verification; compilation alone does not prove it.
 

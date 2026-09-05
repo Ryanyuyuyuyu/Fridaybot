@@ -95,10 +95,10 @@ its Bluetooth permission.
 
 | Path | Payload | Limits |
 | --- | --- | --- |
-| BLE service `7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C01`, identity characteristic `...5C03` | `{"version":1,"hostId":"generated-uuid","name":"LocalHostName"}` | Write with response; firmware requires encryption; JSON shorter than 128 bytes |
+| BLE identity service `7F0D4E66-2AC2-4A71-BFBE-4EF61A0E5C04`, characteristic `...5C03` | `{"version":1,"hostId":"generated-uuid","name":"LocalHostName"}` | Write with response; firmware requires encryption; JSON shorter than 128 bytes |
 | USB HID feature report 7 | Same identity JSON, followed by NUL padding | 128-byte body; macOS buffer is report-ID byte plus body, 129 bytes total |
 | USB HID feature report 8 | Quota JSON, followed by NUL padding | 256-byte body; macOS buffer is 257 bytes total |
-| BLE quota characteristic `...5C02` | Same quota JSON, without padding | Used when no USB identity report is being delivered |
+| BLE quota service `...5C01`, characteristic `...5C02` | Same quota JSON, without padding | Used when no USB identity report is being delivered |
 
 USB matching requires transport USB, VID `0x303A`, PID `0x8360`, usage page
 `0xFF00`, usage 1, and feature report 7. The helper opens devices without seizing
@@ -106,6 +106,14 @@ them and never sends or subscribes to Codex report 6. Identity is refreshed ever
 five seconds on both transports. BLE service discovery retries after connection
 failures, with a 30-second handshake timeout. It sends complete JSON only when
 CoreBluetooth's negotiated write limit permits it.
+
+The identity service is appended as the sixth GATT service. The existing device
+information, HID, battery, quota, and Friday service order and handle counts stay
+unchanged, preserving the cached Friday handles of already paired Macs. The
+helper scans the existing advertised quota service, then discovers the separate
+identity and quota services. A missing identity service triggers one explicit
+service-UUID discovery retry. This upgrade does not clear Bluetooth bonds or
+device NVS. USB report numbers and payloads are unchanged.
 
 Quota fields are `version`, `remaining_percent`, `reset_in_seconds`, and optional
 `five_hour_used_percent` / `weekly_used_percent`. Named rings require matching
