@@ -6,8 +6,9 @@ a device picker, optional USB priority, and same-Mac Bluetooth fallback. See
 [USB build configuration](docs/codex-usb-transport.md), and the
 [Mac identity/usage helper](companion/macos/host_identity/README.md).
 The new image has been written to the verified OTA slot and independently read
-back, with protected flash regions verified unchanged. Physical startup and
-two-Mac behavior validation are pending.
+back, with protected flash regions verified unchanged. Startup, USB enumeration,
+and USB/encrypted-Bluetooth identity delivery are confirmed; native USB control
+and two-Mac behavior validation are pending.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face
