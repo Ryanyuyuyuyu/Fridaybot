@@ -5,10 +5,11 @@ a device picker, optional USB priority, and same-Mac Bluetooth fallback. See
 [host switching and verification](docs/codex-host-switching.md),
 [USB build configuration](docs/codex-usb-transport.md), and the
 [Mac identity/usage helper](companion/macos/host_identity/README.md).
-The `.7` image adds USB discovery compatibility and receive-overflow recovery
-fixes. It has been written to the verified OTA slot and independently read back,
-with protected flash regions verified unchanged. Physical startup, native USB
-control, and two-Mac behavior validation of this revision are pending.
+The `.7` image was written, independently read back, and booted, with protected
+flash regions verified unchanged; native USB initialization still timed out.
+The current `.8` candidate fixes USB receive delivery by using EP0 for host
+writes. Build, host tests, and linked USB descriptor checks pass; `.8` has not
+been flashed. Native USB control and two-Mac behavior validation are pending.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face

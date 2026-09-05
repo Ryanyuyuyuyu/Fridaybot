@@ -59,8 +59,9 @@ idf_component_register(
 
 if(CONFIG_CODEX_MICRO_USB_HID)
     # TinyUSB uses the HID endpoint scratch buffer for control SET_REPORT too.
-    # The largest feature report is 256 bytes plus its Report ID; the interrupt
-    # endpoint descriptors still advertise the full-speed limit of 64 bytes.
+    # The largest feature report is 256 bytes plus its Report ID. Only interrupt
+    # IN is advertised; Output and Feature reports use control SET_REPORT.
+    # An interrupt OUT endpoint would incorrectly wait for this full buffer.
     idf_component_get_property(CODEX_TINYUSB_LIB espressif__tinyusb COMPONENT_LIB)
     target_compile_definitions(${CODEX_TINYUSB_LIB} PUBLIC CFG_TUD_HID_EP_BUFSIZE=257)
 endif()

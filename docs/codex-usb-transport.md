@@ -3,7 +3,9 @@
 The USB variant presents the same vendor HID collection as the Bluetooth
 Codex Micro endpoint: VID `303A`, PID `8360`, usage page `FF00`, usage `1`.
 Native desktop RPC uses report ID `6`, with 63 body bytes and one Report ID
-byte on USB. Both interrupt OUT and control SET_REPORT writes are accepted.
+byte on USB. Input reports use interrupt IN endpoint `0x81`; all host Output
+and Feature writes use control `SET_REPORT` on EP0. There is no interrupt OUT
+endpoint in the configuration descriptor.
 The USB serial string is derived from the chip's factory MAC address.
 USB `bcdDevice` is `0x0100`; BLE keeps its existing PnP release `0x0101`.
 Work Louder's desktop discovery uses the release's low two bits to distinguish
@@ -39,10 +41,23 @@ RPC report 6, so two host processes cannot interleave one JSON RPC message.
 | 8 | Feature | 256 | NUL-padded UTF-8 quota JSON |
 
 Numbered macOS `IOHIDDeviceSetReport` buffers include the Report ID before the
-body. TinyUSB removes that ID for a control SET_REPORT callback. Interrupt OUT
-callbacks are normalized by the transport. Feature reports must have the exact
-advertised body length. The HID interrupt endpoints remain 64 bytes; TinyUSB's
+body. TinyUSB removes that ID for a control SET_REPORT callback. Feature
+reports must have the exact advertised body length. The HID interrupt IN
+endpoint remains 64 bytes; TinyUSB's
 control scratch buffer is 257 bytes to accommodate the quota Feature report.
+
+The IN-only configuration is necessary with the pinned TinyUSB version:
+`src/class/hid/hid_device.c` uses `CFG_TUD_HID_EP_BUFSIZE` both for the control
+buffer and the length passed to `usbd_edpt_xfer` for interrupt OUT. At 257 bytes,
+the DWC2 driver schedules five packets for a 64-byte endpoint and waits for
+transfer completion before delivering `tud_hid_set_report_cb`. A single full
+64-byte RPC report therefore does not finish that receive transfer. The
+Espressif `esp_tinyusb` `test_apps/usb_cv/main/test_usbcv.c` example uses
+`TUD_HID_DESCRIPTOR` with only interrupt IN and still implements the Output
+`SET_REPORT` callback. This configuration keeps Feature 7/8 intact without
+patching the SDK. macOS hidapi sends Output through `IOHIDDeviceSetReport`, so
+the host protocol is unchanged. Actual native RPC success requires a device
+test after installing this configuration.
 
 USB enumeration does not mean the Codex application is ready. The service owns
 the handshake and selection policy. A charge-only connection cannot supply a
@@ -78,6 +93,16 @@ idf.py -B build-usb \
 Use the project's ESP-IDF 5.5.4 environment. The lockfile records the tested
 managed USB dependencies. If reusing a previous `build-usb/sdkconfig`, inspect
 its values because an existing sdkconfig takes precedence over defaults.
+
+After building, verify the actual ELF configuration and report descriptors:
+
+```sh
+python3 tests/usb_configuration_descriptor_test.py build-usb/StopWatch-UserDemo.elf
+```
+
+The check reads the linked descriptor bytes, requires exactly one interrupt IN
+endpoint and no interrupt OUT endpoint, and verifies report 6 Output plus
+Feature reports 7/8. It rejects the previous IN/OUT configuration.
 
 ## Hardware and recovery
 

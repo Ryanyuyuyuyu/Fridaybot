@@ -5,9 +5,10 @@
 `V0.5-friday-codex.6` 新增单一 Mac 控制、设备选择、USB 优先与同机蓝牙回退。
 使用规则、圆屏截图和真机验收见 [设备切换说明](docs/codex-host-switching.md)。
 USB 需要专用构建配置，并在每台 Mac 运行
-[身份与额度助手](companion/macos/host_identity/README.md)。当前 `.7` 补充 USB 发现兼容
-与接收溢出恢复修复，已完成构建、离线检查、指定 OTA 槽写入与独立读回校验，
-受保护区域校验未变；此修订的实体启动、原生 USB 控制与双 Mac 验收待完成。
+[身份与额度助手](companion/macos/host_identity/README.md)。`.7` 已完成指定 OTA 槽写入、
+独立读回、保护区校验和启动，但原生 USB 初始化仍超时。当前 `.8` 候选将主机写入
+改经 EP0 交付，完整构建、主机检查及实际固件描述符检查通过，尚未刷写；原生 USB
+控制与双 Mac 功能验收仍待完成。
 
 这个分支把 Friday 与兼容 Codex Micro 的控制界面做成 M5Stack StopWatch
 launcher 中两个相邻、互相独立的 App。冷启动先进入 launcher，可以直接选择

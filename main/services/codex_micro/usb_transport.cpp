@@ -149,8 +149,11 @@ const tusb_desc_device_t deviceDescriptor = {
 };
 
 const uint8_t configurationDescriptor[] = {
-    TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUD_CONFIG_DESC_LEN + TUD_HID_INOUT_DESC_LEN, 0, 500),
-    TUD_HID_INOUT_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, sizeof(kReportDescriptor), 0x01, 0x81, 64, 1),
+    TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN, 0, 500),
+    // Host Output/Feature writes use EP0 SET_REPORT. TinyUSB also uses its
+    // 257-byte HID control buffer size as the interrupt OUT transfer length;
+    // exposing OUT would wait for multiple 64-byte reports before dispatch.
+    TUD_HID_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, sizeof(kReportDescriptor), 0x81, 64, 1),
 };
 char serialNumber[13] = {};
 const char languageId[] = {0x09, 0x04};
