@@ -53,7 +53,7 @@ struct Point {
 };
 
 constexpr std::array<Point, 6> kAgentCenters = {
-    Point{233, 94}, Point{375, 154}, Point{375, 318}, Point{233, 400}, Point{91, 318}, Point{91, 154},
+    Point{233, 72}, Point{375, 154}, Point{375, 318}, Point{233, 400}, Point{91, 318}, Point{91, 154},
 };
 
 uint8_t colorChannel(uint32_t color, int shift)
@@ -586,7 +586,7 @@ bool DashboardView::init(lv_obj_t* parent)
     for (size_t i = 0; i < _agent_buttons.size(); ++i) {
         auto* button      = lv_button_create(_root);
         _agent_buttons[i] = button;
-        const int32_t diameter = i == 0 ? 80 : 112;
+        constexpr int32_t diameter = 112;
         lv_obj_set_size(button, diameter, diameter);
         lv_obj_set_pos(button, kAgentCenters[i].x - diameter / 2, kAgentCenters[i].y - diameter / 2);
         lv_obj_set_style_radius(button, LV_RADIUS_CIRCLE, LV_PART_MAIN);
@@ -622,31 +622,34 @@ bool DashboardView::init(lv_obj_t* parent)
         lv_obj_center(label);
     }
 
-    _connection_button = lv_button_create(_root);
-    lv_obj_set_size(_connection_button, 216, 32);
-    lv_obj_set_pos(_connection_button, 125, 22);
-    lv_obj_set_style_radius(_connection_button, 16, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(_connection_button, lv_color_hex(kPanelColor), LV_PART_MAIN);
-    lv_obj_set_style_border_width(_connection_button, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(_connection_button, 0, LV_PART_MAIN);
+    // Keep the original six equally sized Agent circles. Connection details
+    // sit quietly in the unused upper-left wedge of the round display.
+    _connection_button = lv_obj_create(_root);
+    lv_obj_remove_style_all(_connection_button);
+    lv_obj_set_size(_connection_button, 84, 39);
+    lv_obj_set_pos(_connection_button, 88, 55);
+    lv_obj_add_flag(_connection_button, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(_connection_button, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(_connection_button, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(_connection_button, handleDeviceMenuEvent, LV_EVENT_CLICKED, this);
     _connection_label = lv_label_create(_connection_button);
     makeTransparentLabel(_connection_label, &lv_font_montserrat_14, kSecondaryText);
-    lv_obj_set_width(_connection_label, 120);
-    lv_label_set_long_mode(_connection_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(_connection_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_size(_connection_label, 78, lv_font_get_line_height(&lv_font_montserrat_14));
+    lv_label_set_long_mode(_connection_label, LV_LABEL_LONG_DOT);
     lv_label_set_text(_connection_label, "Choose Mac");
-    lv_obj_align(_connection_label, LV_ALIGN_LEFT_MID, 14, 0);
-    auto* connection_divider = makeDecorativeObject(_connection_button, 1, 14, kTrackColor);
-    lv_obj_set_pos(connection_divider, 142, 9);
+    lv_obj_set_pos(_connection_label, 4, 0);
+    _connection_dot = makeDecorativeObject(_connection_button, 3, 3, kSecondaryText);
+    lv_obj_set_style_radius(_connection_dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_pos(_connection_dot, 4, 25);
     _transport_label = lv_label_create(_connection_button);
-    makeTransparentLabel(_transport_label, &lv_font_montserrat_14, kSecondaryText);
+    makeTransparentLabel(_transport_label, &lv_font_montserrat_10, kSecondaryText);
     lv_obj_set_width(_transport_label, 58);
-    lv_obj_set_style_text_align(_transport_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_text(_transport_label, "Offline");
-    lv_obj_align(_transport_label, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_set_pos(_transport_label, 13, 20);
+    auto* connection_chevron = lv_label_create(_connection_button);
+    makeTransparentLabel(connection_chevron, &lv_font_montserrat_10, kSecondaryText);
+    lv_label_set_text(connection_chevron, LV_SYMBOL_DOWN);
+    lv_obj_set_pos(connection_chevron, 73, 22);
 
     _battery_label = lv_label_create(_root);
     makeTransparentLabel(_battery_label, &lv_font_montserrat_10, kSecondaryText);
@@ -668,9 +671,10 @@ void DashboardView::update(const DashboardModel& model)
     }
 
     lv_label_set_text(_connection_label, model.connectionText.c_str());
-    lv_obj_set_style_text_color(_connection_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
     lv_label_set_text(_transport_label, model.transportText.c_str());
-    lv_obj_set_style_text_color(_transport_label, lv_color_hex(model.connectionColor), LV_PART_MAIN);
+    lv_obj_set_style_text_color(_transport_label,
+                                lv_color_hex(blendColor(kSecondaryText, model.connectionColor, 0.45f)), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(_connection_dot, lv_color_hex(model.connectionColor), LV_PART_MAIN);
     lv_label_set_text(_battery_label, model.batteryText.c_str());
 
     const auto same_host = [](const codex_micro::HostInfo& left, const codex_micro::HostInfo& right) {
@@ -774,7 +778,7 @@ void DashboardView::handleCircleHitTest(lv_event_t* event)
     const int32_t center_y = (coordinates.y1 + coordinates.y2 + 1) / 2;
     const int32_t delta_x  = info->point->x - center_x;
     const int32_t delta_y  = info->point->y - center_y;
-    const int32_t radius   = binding->isSend ? 104 : (binding->agent == 0 ? 44 : 60);
+    const int32_t radius   = binding->isSend ? 104 : 60;
     info->res              = delta_x * delta_x + delta_y * delta_y <= radius * radius;
 }
 

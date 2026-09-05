@@ -123,6 +123,7 @@ private:
     lv_obj_t* _connection_label = nullptr;
     lv_obj_t* _transport_label = nullptr;
     lv_obj_t* _connection_button = nullptr;
+    lv_obj_t* _connection_dot = nullptr;
     lv_obj_t* _device_overlay = nullptr;
     lv_obj_t* _device_list = nullptr;
     lv_obj_t* _device_menu_message = nullptr;

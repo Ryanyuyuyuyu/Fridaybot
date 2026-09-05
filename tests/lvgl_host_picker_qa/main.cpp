@@ -133,9 +133,23 @@ int main(int argc, char** argv)
     view.update(model);
     save(output, "dashboard");
 
-    tap(225, 38);
-    assert(view.deviceMenuOpen());
+    // A1 retains the original position and hit area; connection metadata must
+    // not cover it or turn a normal agent tap into a device-picker action.
     TouchIntent intent;
+    tap(233, 72);
+    assert(view.popIntent(intent) && intent.type == TouchIntentType::AgentPress && intent.agent == 0);
+    assert(view.popIntent(intent) && intent.type == TouchIntentType::AgentRelease && intent.agent == 0);
+    assert(!view.popIntent(intent));
+
+    auto* connectionName = findLabel(lv_screen_active(), model.connectionText.c_str());
+    assert(connectionName != nullptr);
+    const auto tapConnection = [connectionName] {
+        lv_area_t area;
+        lv_obj_get_coords(lv_obj_get_parent(connectionName), &area);
+        tap((area.x1 + area.x2) / 2, (area.y1 + area.y2) / 2);
+    };
+    tapConnection();
+    assert(view.deviceMenuOpen());
     assert(view.popIntent(intent) && intent.type == TouchIntentType::DeviceMenuOpened);
     assert(!view.popIntent(intent));
 
@@ -199,13 +213,14 @@ int main(int argc, char** argv)
     model.connectionColor = 0xFF7685;
     view.update(model);
     save(output, "dashboard-offline-long-name");
-    auto* longName = findLabel(lv_screen_active(), model.connectionText.c_str());
-    assert(longName != nullptr);
-    assert(findLabel(lv_obj_get_parent(longName), "Offline") != nullptr);
+    // DOT mode replaces the displayed tail in LVGL's text buffer; the label
+    // itself must remain one line and leave its separate status visible.
+    assert(lv_obj_get_height(connectionName) == lv_font_get_line_height(&lv_font_montserrat_14));
+    assert(findLabel(lv_obj_get_parent(connectionName), "Offline") != nullptr);
 
     model.hosts.clear();
     view.update(model);
-    tap(225, 38);
+    tapConnection();
     assert(view.deviceMenuOpen());
     save(output, "devices-empty");
     std::puts("LVGL host picker: real pointer input, modal isolation, offline selection, scroll and old-touch cancellation PASS");

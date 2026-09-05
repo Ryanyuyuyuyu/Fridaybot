@@ -397,7 +397,8 @@ def test_flash_capsule_contract(root: Path, contract: Contract) -> None:
 
 
 def test_codex_ui_source_fingerprint(root: Path, contract: Contract) -> None:
-    # User-authorized Codex host switching updates the UI/controller baseline.
+    # User-authorized host switching and its visual integration update this
+    # UI/controller baseline, including restoration of the equal Agent circles.
     # Keep a fingerprint boundary for later, unrelated Friday changes. Native
     # LVGL QA and host-selection tests validate the new behavior independently.
     expected = {
@@ -406,9 +407,9 @@ def test_codex_ui_source_fingerprint(root: Path, contract: Contract) -> None:
         "main/apps/app_codex_micro/app_codex_micro.h":
             "d28e3cf1caa41d73627f264c0ac15a0a456937a09d022b5567cf9f57643cec1f",
         "main/apps/app_codex_micro/view/view.cpp":
-            "2484d4bef43dbcb19e31e8e6c30b29f8fb5c791b4eee19bdb80656d073158926",
+            "124a16f689fb7f8525abd22c2a69245732239df151ff2add72d10c38454c7c9e",
         "main/apps/app_codex_micro/view/view.h":
-            "1581019f3ee02b3ef5d52717248ebfcf1ae6636a05fa914c9c7489c061767e06",
+            "b2d6a85844074c30b0071d96d99e22d3d3bee7ee9f12bed20e59c6b31c44654d",
     }
     for relative, digest in expected.items():
         contract.require(
