@@ -9,6 +9,8 @@ The new image has been written to the verified OTA slot and independently read
 back, with protected flash regions verified unchanged. Startup, USB enumeration,
 and USB/encrypted-Bluetooth identity delivery are confirmed; native USB control
 and two-Mac behavior validation are pending.
+The current `.7` source adds USB discovery compatibility and receive-overflow
+recovery fixes; it has not yet replaced the `.6` image on the device.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face

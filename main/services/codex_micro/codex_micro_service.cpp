@@ -844,8 +844,12 @@ bool Service::Impl::processUsb()
             refreshRouting();
         } else if (event.epoch == usbEpoch && usbConnection.active) {
             if (event.type == usb::EventType::Overflow) {
-                clearRpcAssembly(usbConnection);
-                usbConnection.rpcDiscardUntilNewline = true;
+                // Native desktop requests contain no trailing newline, so
+                // waiting for one would discard every later RPC forever.
+                // End the damaged stream instead of guessing a JSON boundary.
+                usb::disconnect();
+                usbReconnectAtMs = nowMs() + 150;
+                break;
             } else if (event.type == usb::EventType::HostIdentity) {
                 acceptHostIdentity(usbConnection, event.data, event.length);
             } else if (event.type == usb::EventType::Quota) {

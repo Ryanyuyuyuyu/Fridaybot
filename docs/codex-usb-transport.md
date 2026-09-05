@@ -5,6 +5,29 @@ Codex Micro endpoint: VID `303A`, PID `8360`, usage page `FF00`, usage `1`.
 Native desktop RPC uses report ID `6`, with 63 body bytes and one Report ID
 byte on USB. Both interrupt OUT and control SET_REPORT writes are accepted.
 The USB serial string is derived from the chip's factory MAC address.
+USB `bcdDevice` is `0x0100`; BLE keeps its existing PnP release `0x0101`.
+Work Louder's desktop discovery uses the release's low two bits to distinguish
+USB when an explicit transport value is absent, so USB must end in binary `00`.
+
+Static compatibility evidence was checked against the locally installed
+`ChatGPT Classic.app` version `26.901.31953` on 2026-09-05. Its `app.asar`
+contains `@worklouder/wl-device-kit/dist/index.js` (under `device-kit-oai`):
+lines 5189/5195 register PID `33632` (`8360`) and VID `12346` (`303A`),
+line 5240 requires usage page `65280` (`FF00`), and line 5247 classifies USB
+using `(device.release & 3) === 0`. Its current service bundle
+`.vite/build/service-z8uGrRiL.js` prefers explicit `transport === "usb"`,
+otherwise uses the same release fallback, then sorts USB interfaces first.
+On macOS that service uses a separate native topology enumerator; the bundled
+node-hid enumerator inspected locally omits the transport field. Therefore the
+release correction fixes a confirmed fallback incompatibility, while native
+USB handshake and the cause of an absent report-6 response still require
+separate runtime verification. VID/PID/usage matching alone does not prove it.
+
+USB receive-queue overflow ends the damaged USB session and reconnects after
+150 ms, using the existing recovery preference policy. It must not wait for a
+newline to resume parsing: native desktop requests are JSON without a trailing
+newline. No receive overflow was observed in the initial device run; this is a
+confirmed recovery defect, not an established cause of that run's RPC timeout.
 
 The separate host identity helper uses atomic Feature reports. It never writes
 RPC report 6, so two host processes cannot interleave one JSON RPC message.

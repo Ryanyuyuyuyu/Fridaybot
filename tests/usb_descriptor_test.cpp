@@ -51,6 +51,10 @@ int main()
     }
     assert(collections == 0);
     assert(kVendorId == 0x303a && kProductId == 0x8360);
+    // The desktop's Work Louder registry tests release & 3 when its HID
+    // enumeration has no explicit transport field. Copying BLE's 0x0101 here
+    // makes a physical USB endpoint lose USB classification and priority.
+    assert((kDeviceRelease & 3) == 0);
     assert(bits[6][0] == 63 * 8 && bits[6][1] == 63 * 8 && bits[6][2] == 0);
     assert(bits[7][0] == 0 && bits[7][1] == 0 && bits[7][2] == 128 * 8);
     assert(bits[8][0] == 0 && bits[8][1] == 0 && bits[8][2] == 256 * 8);

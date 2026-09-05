@@ -1,8 +1,11 @@
 # Codex：选择 Mac 与 USB 优先
 
 本次开发位于 `codex/single-host-usb-priority`，基于已推送的闪念胶囊提交
-`1e67fbd`，固件版本 `V0.5-friday-codex.6`。2026-09-05 已写入核实后的 `ota_1`，
+`1e67fbd`。2026-09-05 已将 `V0.5-friday-codex.6` 写入核实后的 `ota_1`，
 独立读回与受保护区域校验通过；实体启动、USB 枚举及 USB/加密蓝牙身份识别已确认。
+当前源码为 `.7`：修正 USB 版本字段的桌面兼容回退判断，并在接收溢出后重建
+USB 会话，避免等待原生请求不携带的换行符。`.7` 尚未刷写；这两项缺陷均不能
+单独证明是 `.6` 本次连接超时的原因，仍需真机复测。
 
 ## 使用规则
 
@@ -50,9 +53,11 @@ USB 构建需要专用配置，见 [USB 传输和恢复说明](codex-usb-transpo
 严格签名验证。本机助手已单独安装并启动，未替换 Friday Companion，未改登录项。
 下面的双 Mac 功能验收仍待执行。
 
-固件：`build-usb/StopWatch-UserDemo.bin`，4,366,016 字节，SHA-256：
+已刷 `.6` 固件保存在独立设备备份目录的 `new-firmware.bin`，4,366,016 字节，SHA-256：
 `8bbc1cfd69d7bf04109f4c0e21ccda02442d63ad8ff04c5affc51264bdee6d20`。
 助手安装包：`companion/macos/host_identity/build/CodexHostIdentity.zip`。
+`build-usb/StopWatch-UserDemo.bin` 随当前源码构建更新，不能当作上述已刷镜像；
+以该目录的 `verification-manifest.json` 核对当前候选版本及是否已刷写。
 
 刷前保护检查另补充了 USB 每轮总等待预算、发送失败断开及同主机恢复首选逻辑，
 避免 USB 拥堵阻塞 Friday 的录音发送或软件重连抢回手动选择。兼容检查确认旧五个
@@ -73,6 +78,9 @@ Friday、音频 HAL、Launcher、时钟及秒表等源码与 `.5` 保持一致�
 - 启动后被动监听 45 秒，USB 始终在线，未收到 Report 6 / RPC 响应；监听工具未写入
   任何报告。此窗口不能确认原生桌面端的 USB 握手，也不能排除握手已在监听前完成。
   仍需结合设备顶部传输标记及实际操作确认 USB 控制。
+- 原生桌面日志在 `05:59:40 UTC` 记录 HID 连接及 `v.oai.rgbcfg` 初始化，之后
+  连续超时；该日志未标明请求使用 USB 还是 BLE。请求格式和响应结构的只读核对
+  未发现不兼容，尚不能认定原生控制链路正常。
 
 本机 SDK 的 `otatool` 与 `ParttoolTarget` 位置参数不兼容，第一次切槽触发了默认重启；
 随后复核确认最新 NVS、程序和分区信息未变，只有预期 OTA 元数据改变。后续激活使用

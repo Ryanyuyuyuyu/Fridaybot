@@ -8,12 +8,16 @@ namespace codex_micro::usb {
 
 inline constexpr uint16_t kVendorId = 0x303a;
 inline constexpr uint16_t kProductId = 0x8360;
+// Work Louder discovery uses the release low two bits as a transport fallback:
+// 0 means USB. BLE retains its existing PnP release 0x0101 in the GATT database.
+inline constexpr uint16_t kDeviceRelease = 0x0100;
 inline constexpr uint8_t kRpcReportId = 6;
 inline constexpr uint8_t kIdentityReportId = 7;
 inline constexpr uint8_t kQuotaReportId = 8;
 inline constexpr size_t kRpcBodySize = 63;
 inline constexpr size_t kIdentityBodySize = 128;
 inline constexpr size_t kQuotaBodySize = 256;
+static_assert((kDeviceRelease & 3) == 0, "USB release must identify USB in legacy desktop discovery");
 
 // The RPC collection matches Codex Micro's BLE vendor HID collection. Feature
 // report 7 is a separate atomic identity channel, so the identity helper cannot
