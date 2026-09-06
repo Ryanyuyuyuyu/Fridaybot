@@ -118,7 +118,7 @@ bool HostSelection::migrateIdentity(const std::string& alias, const std::string&
 bool HostSelection::registerReady(int32_t endpoint, Transport transport, const std::string& id,
                                   const std::string& name, bool legacyIdentity)
 {
-    if (!validIdentity(id, name)) {
+    if (endpoint < 0 || !validIdentity(id, name)) {
         return false;
     }
     auto existing = std::find_if(routes_.begin(), routes_.end(), [endpoint](const ReadyRoute& route) {

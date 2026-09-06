@@ -123,4 +123,56 @@ int main()
     unknown.mounted(true, kMacB);  // No old confirmed identity: never infer it.
     unknown.identityConfirmed(kMacA);
     assert(unknown.takeForReadyHost(kMacA).empty());
+
+    // A click after insertion is newer than the default USB preference, even
+    // if the separate native RPC and helper identity have not both arrived.
+    for (bool resumed : {false, true}) {
+        for (bool identityFirst : {false, true}) {
+            for (bool cableMoved : {false, true}) {
+                Fixture pending;
+                pending.mount(resumed);
+                if (identityFirst) pending.identity(cableMoved ? kMacC : kMacA); else pending.rpc();
+                pending.select(kMacB);
+                if (identityFirst) pending.rpc(); else pending.identity(cableMoved ? kMacC : kMacA);
+                assert(pending.hosts.preferredHostId() == kMacB);
+                assert(pending.hosts.selectedRoute()->endpoint == 2);
+                for (int heartbeat = 0; heartbeat < 32; ++heartbeat) pending.rpc();
+                assert(pending.hosts.preferredHostId() == kMacB);
+                // A subsequent physical attachment is a new default choice.
+                pending.mount(false);
+                pending.identity(kMacA);
+                pending.rpc();
+                assert(pending.hosts.preferredHostId() == kMacA);
+            }
+        }
+    }
+
+    Fixture unfinishedChoice;
+    unfinishedChoice.mount(false);
+    unfinishedChoice.select(kMacB);
+    unfinishedChoice.rpc();
+    unfinishedChoice.mount(true);  // Retry before identity arrives.
+    unfinishedChoice.identity(kMacC);
+    unfinishedChoice.rpc();
+    assert(unfinishedChoice.hosts.preferredHostId() == kMacB);
+
+    Fixture offlineChoice;
+    offlineChoice.mount(false);
+    offlineChoice.hosts.disconnect(2);
+    offlineChoice.select(kMacB);
+    offlineChoice.identity(kMacA);
+    offlineChoice.rpc();
+    assert(offlineChoice.hosts.preferredHostId() == kMacB);
+    assert(!offlineChoice.hosts.selectedRoute());
+    assert(offlineChoice.hosts.registerReady(12, Transport::Ble, kMacB, "Mac B"));
+    assert(offlineChoice.hosts.selectedRoute()->endpoint == 12);
+
+    codex_micro::usb::ResumePreference premature;
+    premature.mounted(false, kMacA);
+    premature.manuallySelected(kMacB);
+    assert(premature.takeForReadyHost(kMacA).empty());
+    premature.identityConfirmed(kMacC);
+    assert(premature.takeForReadyHost(kMacA).empty());
+    assert(premature.takeForReadyHost(kMacC) == kMacB);
+    assert(premature.takeForReadyHost(kMacC).empty());
 }

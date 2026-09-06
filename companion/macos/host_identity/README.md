@@ -36,7 +36,9 @@ signing, which makes strict signature checks fail. Its signature is not the
 packaged-app verification result. `make test` checks Unicode-safe identity encoding,
 alias persistence and validation, unchanged UUIDs when renaming, file permissions,
 unsafe file paths, quota selection and malformed inputs, and four local
-fake app-server scenarios. Tests neither connect to hardware nor start real
+fake app-server scenarios. A separate pure C policy test covers scan windows,
+bounded backoff, USB/BLE reconnect, wake recovery, and quota scheduling. Tests
+neither connect to hardware nor start real
 Codex, request permissions, read credentials, or create the real host identity.
 
 ## Run manually
@@ -83,8 +85,13 @@ sign-in through `app-server`, with only `initialize`, `initialized`, and
 `account/rateLimits/read`. Each temporary child exits after the read. No login,
 chat, task, approval, purchase, reset, or thread API is called. Failures leave
 identity/control operation available and are logged; unavailable quota is not
-reported as zero. Reads start after a compatible device accepts identity, then
-repeat at most once a minute. Use this helper as the quota writer when testing
+reported as zero. Reads start promptly after a compatible device accepts identity,
+then run every 180 seconds while a path is ready. A new connection or Mac wake
+requests a fresh read; an existing read completes without starting a duplicate
+child. Repeated connection changes share a 30-second minimum child-start interval.
+A successful result less than 30 seconds old can immediately serve a new path,
+with its reset countdown reduced by the elapsed time. No ready device means no
+new quota child. Use this helper as the quota writer when testing
 USB-only operation; older BLE-only quota helpers do not prioritize USB.
 
 Rebuilding an ad-hoc signed app may require renewing its Bluetooth permission.
@@ -166,8 +173,9 @@ version that supports aliases. For example, use `Mac P` on the private Mac and
 
 These commands do not connect to Bluetooth or USB, start a Codex app-server, or
 create/change the host UUID. They can run alongside the updated helper: it reads
-the saved name for each identity announcement, normally within five seconds when
-connected. Updating an older installed helper still requires the normal app
+the saved name into a memory cache and watches its private directory for changes.
+A changed alias triggers a new announcement when connected. Updating an older
+installed helper still requires the normal app
 replacement and manual launch. The name commands themselves do not install or
 restart anything. The native Codex app and Friday Companion need no changes.
 
@@ -188,10 +196,35 @@ preference. Each name command is used alone, without startup options.
 
 USB matching requires transport USB, VID `0x303A`, PID `0x8360`, usage page
 `0xFF00`, usage 1, and feature report 7. The helper opens devices without seizing
-them and never sends or subscribes to Codex report 6. Identity is refreshed every
-five seconds on both transports. BLE service discovery retries after connection
-failures, with a 30-second handshake timeout. It sends complete JSON only when
-CoreBluetooth's negotiated write limit permits it.
+them and never sends or subscribes to Codex report 6. Identity is sent on USB
+attachment, BLE identity discovery, Mac wake, and alias changes. A 60-second
+recovery announcement handles missed device-resume/connection events; failed
+USB writes retry after five seconds. The helper stays running so reconnects do
+not lose USB identity. BLE handshakes have a 30-second timeout. It sends complete
+JSON only when CoreBluetooth's negotiated write limit permits it.
+
+Bluetooth discovery uses eight-second windows with duplicate callbacks disabled.
+Unsuccessful discovery backs off for 15, 30, 60, then at most 120 seconds between
+windows. Scanning stops while USB identity is ready or a BLE connection/handshake
+exists, and actual disconnection or Bluetooth restoration reevaluates discovery.
+An existing BLE connection is retained when USB becomes available.
+
+On macOS, the helper also observes matching native BLE HID appearance through
+IOHIDManager. That event queries already connected CoreBluetooth peripherals and
+supplies their identity even while USB is active; it does not send HID reports
+to the BLE device. A two-second follow-up and a 60-second recovery query cover
+discovery timing and missed events. This is necessary because CoreBluetooth's
+generic connection-event registration API is unavailable on macOS. Actual
+cross-Mac/native-HID event timing still requires the two-Mac checks below; offline
+tests cannot prove that OS callbacks arrive promptly on every Mac.
+
+The scheduler uses one-shot timers with up to 0.5 seconds of tolerance. Stable
+connections wake for recovery or quota work rather than polling every five
+seconds. Alias data is cached, and periodic work does not reread/chmod the alias
+files while the directory watch is healthy. Timer and quota work use local
+autorelease pools. There is no sleep-prevention assertion. These reduce scheduled
+work; CPU, resident memory, and battery changes require measurements of the
+installed helper and its temporary app-server children.
 
 The identity service is appended as the sixth GATT service. The existing device
 information, HID, battery, quota, and Friday service order and handle counts stay

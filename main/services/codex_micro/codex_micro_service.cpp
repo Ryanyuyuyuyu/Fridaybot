@@ -9,6 +9,8 @@
 #include "services/codex_micro/usb_write.h"
 #include "services/codex_micro/usb_resume_policy.h"
 #include "services/codex_micro/ble_sessions.h"
+#include "services/codex_micro/telemetry_projection.h"
+#include "services/codex_micro/deferred_control.h"
 
 #include <ArduinoJson.h>
 
@@ -149,6 +151,7 @@ struct Connection {
     bool legacyIdentity              = true;
     bool identityConfirmed            = false;
     std::array<Thread, 6> threads{};
+    ThreadFieldMetadata threadFields{};
     Quota quota{};
     RateLimitUsage rateLimits{};
     bool active                      = false;
@@ -212,6 +215,7 @@ struct Service::Impl {
     void registerHost(Connection& connection);
     void refreshRouting();
     void publishTelemetry();
+    void synchronizeThreadTelemetry(const std::string& hostId, int32_t preferredEndpoint = -1);
     bool releaseOldRoute(int32_t endpoint);
     void loadHosts();
     void saveHosts();
@@ -245,7 +249,7 @@ struct Service::Impl {
     void enqueueWrite(esp_gatt_if_t gattsIf, const esp_ble_gatts_cb_param_t& parameters);
     void processControlEvent(const ControlEvent& event);
     void processWrite(const WriteEvent& write);
-    void processCommand(const Command& command);
+    bool processCommand(const Command& command);
     bool processQueuedCommands();
     bool processPendingReleases();
     bool processRpcTimeouts();
@@ -271,11 +275,11 @@ struct Service::Impl {
     void updateThreads(JsonArrayConst values, uint16_t connectionId);
     void sendMethodNotFound(JsonVariantConst id, uint16_t connectionId);
     void sendSuccess(JsonVariantConst id, uint16_t connectionId);
-    bool sendJson(const std::string& json, int32_t targetConnection = -1);
-    bool sendJsonToConnection(const std::string& framed, Connection& connection);
+    bool sendJson(const std::string& json, int32_t targetConnection = -1, bool* deferredBeforeAttempt = nullptr);
+    bool sendJsonToConnection(const std::string& framed, Connection& connection, bool* deferredBeforeAttempt = nullptr);
     bool sendReport(const uint8_t* report, Connection& connection);
-    bool sendKeyNow(const char* key, uint8_t action, int8_t agent);
-    bool sendJoystickNow(float angle, float distance);
+    bool sendKeyNow(const char* key, uint8_t action, int8_t agent, bool* deferredBeforeAttempt = nullptr);
+    bool sendJoystickNow(float angle, float distance, bool* deferredBeforeAttempt = nullptr);
     bool sendFridayTransferNow(const uint8_t* packet, size_t length);
     void updateFridayConnectionIntervals(bool active);
     void setBatteryNow(uint8_t percentage, bool charging);
@@ -312,7 +316,9 @@ struct Service::Impl {
     HostSelection hostSelection;
     std::vector<HostBinding> hostBindings;
     std::string savedHosts;
+    uint32_t telemetryExpiresAtMs = 0;
     std::atomic<uint32_t> controlEpoch{1};
+    DeferredControlGate deferredControls;
     BleSessions callbackSessions;
     portMUX_TYPE callbackSessionMux = portMUX_INITIALIZER_UNLOCKED;
     int32_t routedConnection = -1;
@@ -602,6 +608,9 @@ void Service::Impl::acceptHostIdentity(Connection& connection, const uint8_t* by
     if (std::any_of(name.begin(), name.end(), [](unsigned char c) { return c < 32 || c == 127; })) return;
     // A live physical transport cannot change identity mid-session. Renames are fine.
     if (connection.identityConfirmed && connection.hostId != id) return;
+    // A recovery heartbeat is not a new connection or user selection. Native
+    // RPC readiness is registered separately when that handshake arrives.
+    if (connection.identityConfirmed && connection.hostId == id && connection.hostName == name) return;
     if (!connection.usb) {
         char alias[32];
         std::snprintf(alias, sizeof(alias), "ble-%02x%02x%02x%02x%02x%02x", connection.address[0],
@@ -639,6 +648,7 @@ void Service::Impl::acceptHostIdentity(Connection& connection, const uint8_t* by
         usbResumePreference.identityConfirmed(id);
         registerHost(connection);
     }
+    synchronizeThreadTelemetry(id);
     refreshRouting();
 }
 
@@ -652,6 +662,9 @@ void Service::Impl::registerHost(Connection& connection)
         const std::string preference = usbResumePreference.takeForReadyHost(connection.hostId);
         if (!preference.empty()) hostSelection.selectHost(preference);
     }
+    // Seed a newly ready, bonded route even when the native app sends no new
+    // Agent update before the old route disappears.
+    if (accepted) synchronizeThreadTelemetry(connection.hostId);
 }
 
 bool Service::Impl::releaseOldRoute(int32_t endpoint)
@@ -707,52 +720,126 @@ void Service::Impl::refreshRouting()
         heldJoystickAngle = 0;
         routedConnection = next;
         routedHostId = nextHost;
-        xSemaphoreTake(stateMutex, portMAX_DELAY);
-        state.threads = {};
-        state.quota = {};
-        state.rateLimits = {};
-        clearHostRpcLocked();
-        state.connectionEpoch = controlEpoch.load();
-        xSemaphoreGive(stateMutex);
     }
-    xSemaphoreTake(stateMutex, portMAX_DELAY);
-    state.hosts = hostSelection.hosts();
-    state.activeHostId = nextHost;
-    state.activeHostName = hostSelection.selectedName();
-    state.preferredHostId = hostSelection.preferredHostId();
-    state.transport = selection ? selection->transport : Transport::Ble;
-    state.connected = next >= 0;
-    state.usbMounted = usbConnection.active;
-    ++state.revision;
-    xSemaphoreGive(stateMutex);
+    // Publish route identity, transport and its Mac's telemetry under one lock.
     publishTelemetry();
     saveHosts();
 }
 
 void Service::Impl::publishTelemetry()
 {
-    const Connection* selected = routedConnection >= 0 ? findConnection(static_cast<uint16_t>(routedConnection)) : nullptr;
-    if (!selected) return;
-    const Connection* quota = selected;
-    // Legacy quota writers use a separate GATT connection. Associate it with
-    // the selected Mac, never with whichever Mac wrote most recently globally.
-    for (const auto& peer : connections) {
-        if (selected->usb && selected->quota.available && nowMs() - selected->quota.receivedAtMs < 120000) break;
-        if (peer.active && peer.secure && peer.hostId == selected->hostId && peer.quota.available &&
-            (!quota->quota.available || static_cast<int32_t>(peer.quota.receivedAtMs - quota->quota.receivedAtMs) > 0)) {
-            quota = &peer;
+    const uint32_t now = nowMs();
+    const auto route = hostSelection.selectedRoute();
+    std::array<const Connection*, kMaxConnections + 1> peers{};
+    std::array<TelemetrySource, kMaxConnections + 1> sources{};
+    peers[0] = &usbConnection;
+    for (size_t i = 0; i < connections.size(); ++i) peers[i + 1] = &connections[i];
+    for (size_t i = 0; i < peers.size(); ++i) {
+        const auto& peer = *peers[i];
+        sources[i] = {peer.id, peer.hostId, peer.usb ? Transport::Usb : Transport::Ble,
+                      peer.active, peer.secure, peer.rpcReady,
+                      peer.rpcReady && peer.inputNotifications ? &peer.threadFields : nullptr,
+                      peer.quota.available, peer.quota.receivedAtMs,
+                      peer.rateLimits.fiveHourAvailable, peer.rateLimits.weeklyAvailable,
+                      peer.rateLimits.receivedAtMs};
+    }
+    const auto projection = selectTelemetry(routedHostId, route, sources.data(), sources.size(), now);
+    State next;
+    next.hosts = hostSelection.hosts();
+    next.activeHostId = routedHostId;
+    next.activeHostName = hostSelection.selectedName();
+    next.preferredHostId = hostSelection.preferredHostId();
+    next.transport = route ? route->transport : Transport::Ble;
+    next.connected = projection.routeIndex != kNoTelemetrySource;
+    next.usbMounted = usbConnection.active;
+    next.connectionEpoch = controlEpoch.load();
+    if (next.connected) {
+        const auto& selected = *peers[projection.routeIndex];
+        next.hostRpcObserved = selected.rpcReady;
+        next.lastHostRpcAtMs = selected.lastRpcAtMs;
+        for (size_t i = 0; i < next.threads.size(); ++i) {
+            const auto& fields = projection.threadIndices[i];
+            if (fields[0] != kNoTelemetrySource) next.threads[i].color = peers[fields[0]]->threads[i].color;
+            if (fields[1] != kNoTelemetrySource) next.threads[i].brightness = peers[fields[1]]->threads[i].brightness;
+            if (fields[2] != kNoTelemetrySource) next.threads[i].effect = peers[fields[2]]->threads[i].effect;
+            if (fields[3] != kNoTelemetrySource) next.threads[i].speed = peers[fields[3]]->threads[i].speed;
         }
     }
+    // Schedule one expiry at the next displayed quota's deadline. No polling
+    // timer or background redraw is needed while values remain unchanged.
+    uint32_t expiresInMs = UINT32_MAX;
+    const auto expires = [&](uint32_t receivedAt) {
+        expiresInMs = std::min(expiresInMs, kQuotaFreshForMs - (now - receivedAt));
+    };
+    if (projection.quotaIndex != kNoTelemetrySource) {
+        next.quota = peers[projection.quotaIndex]->quota;
+        expires(next.quota.receivedAtMs);
+    }
+    if (projection.fiveHourIndex != kNoTelemetrySource) {
+        const auto& limits = peers[projection.fiveHourIndex]->rateLimits;
+        next.rateLimits.fiveHourUsedPercent = limits.fiveHourUsedPercent;
+        next.rateLimits.fiveHourAvailable = true;
+        next.rateLimits.receivedAtMs = limits.receivedAtMs;
+        expires(limits.receivedAtMs);
+    }
+    if (projection.weeklyIndex != kNoTelemetrySource) {
+        const auto& limits = peers[projection.weeklyIndex]->rateLimits;
+        next.rateLimits.weeklyUsedPercent = limits.weeklyUsedPercent;
+        next.rateLimits.weeklyAvailable = true;
+        if (!next.rateLimits.fiveHourAvailable || now - limits.receivedAtMs < now - next.rateLimits.receivedAtMs) {
+            next.rateLimits.receivedAtMs = limits.receivedAtMs;
+        }
+        expires(limits.receivedAtMs);
+    }
+    telemetryExpiresAtMs = expiresInMs == UINT32_MAX ? 0 : now + expiresInMs;
+    if (expiresInMs != UINT32_MAX && telemetryExpiresAtMs == 0) telemetryExpiresAtMs = 1;
     xSemaphoreTake(stateMutex, portMAX_DELAY);
-    state.threads = selected->threads;
-    state.quota = quota->quota;
-    state.rateLimits = quota->rateLimits;
-    state.hostRpcObserved = selected->rpcReady;
-    state.lastHostRpcAtMs = selected->lastRpcAtMs;
-    hostRpcConnectionValid = selected->rpcReady;
-    hostRpcConnectionId = selected->id;
-    ++state.revision;
+    next.revision = state.revision + 1;
+    state = std::move(next);
+    hostRpcConnectionValid = state.hostRpcObserved;
+    hostRpcConnectionId = state.connected ? peers[projection.routeIndex]->id : 0;
     xSemaphoreGive(stateMutex);
+}
+
+void Service::Impl::synchronizeThreadTelemetry(const std::string& hostId, int32_t preferredEndpoint)
+{
+    if (hostId.empty()) return;
+    std::array<Connection*, kMaxConnections + 1> peers{};
+    std::array<TelemetrySource, kMaxConnections + 1> sources{};
+    peers[0] = &usbConnection;
+    for (size_t i = 0; i < connections.size(); ++i) peers[i + 1] = &connections[i];
+    if (preferredEndpoint < 0 && routedHostId == hostId) preferredEndpoint = routedConnection;
+    size_t preferredSource = kNoTelemetrySource;
+    for (size_t i = 0; i < peers.size(); ++i) {
+        const auto& peer = *peers[i];
+        if (peer.id == preferredEndpoint) preferredSource = i;
+        sources[i].endpoint = peer.id;
+        sources[i].hostId = peer.hostId;
+        sources[i].active = peer.active && peer.rpcReady && peer.inputNotifications;
+        sources[i].secure = peer.secure;
+        sources[i].threadFields = &peer.threadFields;
+    }
+    const auto fields = selectThreadFields(hostId, sources.data(), sources.size(), nowMs(), preferredSource);
+    for (auto* destination : peers) {
+        if (!destination->active || !destination->secure || !destination->rpcReady ||
+            !destination->inputNotifications || destination->hostId != hostId) continue;
+        for (size_t agent = 0; agent < destination->threads.size(); ++agent) {
+            for (size_t field = 0; field < fields[agent].size(); ++field) {
+                const size_t sourceIndex = fields[agent][field];
+                if (sourceIndex == kNoTelemetrySource || peers[sourceIndex] == destination) continue;
+                const auto& source = *peers[sourceIndex];
+                switch (static_cast<ThreadField>(field)) {
+                    case ThreadField::Color: destination->threads[agent].color = source.threads[agent].color; break;
+                    case ThreadField::Brightness: destination->threads[agent].brightness = source.threads[agent].brightness; break;
+                    case ThreadField::Effect: destination->threads[agent].effect = source.threads[agent].effect; break;
+                    case ThreadField::Speed: destination->threads[agent].speed = source.threads[agent].speed; break;
+                }
+                // Preserve the receipt time. Identity/transport changes never
+                // turn an older cached value into a fresh native update.
+                destination->threadFields[agent][field] = source.threadFields[agent][field];
+            }
+        }
+    }
 }
 
 bool Service::Impl::processUsb()
@@ -915,7 +1002,17 @@ void Service::Impl::worker()
     ESP_LOGI(kTag, "BLE worker running");
     while (true) {
         usb::beginServiceCycle();
-        bool didWork = processUsb();
+        bool didWork = false;
+        // A retained input gets first use of this iteration's existing budget.
+        // Admission below checks the live transport epoch even before lifecycle
+        // events are drained, so a reused USB endpoint cannot receive old keys.
+        if (releaseQueueLost.exchange(false)) {
+            didWork = true;
+            handleReleaseQueueLoss();
+        }
+        const bool prioritizedControls = deferredControls.waiting();
+        if (prioritizedControls && processQueuedCommands()) didWork = true;
+        if (processUsb()) didWork = true;
         ControlEvent control{};
         for (size_t count = 0; count < kControlQueueDepth && xQueueReceive(controlQueue, &control, 0) == pdTRUE;
              ++count) {
@@ -934,7 +1031,7 @@ void Service::Impl::worker()
             handleReleaseQueueLoss();
         }
 
-        if (processQueuedCommands()) {
+        if (!prioritizedControls && processQueuedCommands()) {
             didWork = true;
         }
         if (processPendingReleases()) {
@@ -956,7 +1053,8 @@ void Service::Impl::worker()
             didWork = true;
             handleCallbackQueueLoss(lostControl, lostWrite);
         }
-        if (!didWork) {
+        if (!didWork || deferredControls.waiting()) {
+            // A deferred queue is work for the next turn, not a reason to spin.
             vTaskDelay(pdMS_TO_TICKS(2) == 0 ? 1 : pdMS_TO_TICKS(2));
         }
     }
@@ -1774,7 +1872,13 @@ void Service::Impl::handleCccdWrite(const WriteEvent& write)
         static_cast<uint16_t>(write.data[0]) | static_cast<uint16_t>(static_cast<uint16_t>(write.data[1]) << 8);
     if (write.handle == hidHandles[detail::kHidInputCccd]) {
         connection->inputNotifications = (value & 0x0001) != 0;
-        if (!connection->inputNotifications) hostSelection.disconnect(connection->id);
+        if (!connection->inputNotifications) {
+            hostSelection.disconnect(connection->id);
+            connection->threads = {};
+            connection->threadFields = {};
+            connection->rpcReady = false;
+            connection->lastRpcAtMs = 0;
+        }
         registerHost(*connection);
         refreshRouting();
         if (connection->fridayPeer) {
@@ -1953,19 +2057,28 @@ void Service::Impl::updateThreads(JsonArrayConst values, uint16_t connectionId)
 {
     Connection* connection = findConnection(connectionId);
     if (connection == nullptr) return;
+    const uint32_t receivedAt = nowMs();
+    bool updated = false;
     for (JsonObjectConst value : values) {
         const int id = value["id"] | -1;
         if (id < 0 || id >= static_cast<int>(connection->threads.size())) {
             continue;
         }
         Thread& thread = connection->threads[static_cast<size_t>(id)];
+        auto& fields = connection->threadFields[static_cast<size_t>(id)];
+        const auto received = [&](ThreadField field) {
+            fields[static_cast<size_t>(field)] = {true, receivedAt};
+            updated = true;
+        };
         if (value["c"].is<uint32_t>()) {
             thread.color = value["c"].as<uint32_t>() & 0x00FFFFFFU;
+            received(ThreadField::Color);
         }
         if (value["b"].is<float>()) {
             const float brightness = value["b"].as<float>();
             if (std::isfinite(brightness)) {
                 thread.brightness = std::clamp(brightness, 0.0f, 1.0f);
+                received(ThreadField::Brightness);
             }
         }
         if (value["e"].is<const char*>()) {
@@ -1976,27 +2089,40 @@ void Service::Impl::updateThreads(JsonArrayConst values, uint16_t connectionId)
             }
             if (effect != nullptr && effectLength <= kMaxEffectLength) {
                 thread.effect = effect;
+                received(ThreadField::Effect);
             }
         }
         if (value["s"].is<float>()) {
             const float speed = value["s"].as<float>();
             if (std::isfinite(speed)) {
                 thread.speed = std::clamp(speed, 0.0f, 100.0f);
+                received(ThreadField::Speed);
             }
         }
     }
-    publishTelemetry();
+    if (updated) {
+        synchronizeThreadTelemetry(connection->hostId, connection->id);
+        publishTelemetry();
+    }
 }
 
 void Service::Impl::noteHostRpc(uint16_t connectionId)
 {
     Connection* connection = findConnection(connectionId);
     if (connection == nullptr || !connection->secure) return;
+    const bool wasReady = connection->rpcReady;
     connection->rpcReady = true;
     connection->lastRpcAtMs = nowMs();
-    registerHost(*connection);
-    refreshRouting();
-    publishTelemetry();
+    if (!wasReady) {
+        registerHost(*connection);
+        refreshRouting();
+    } else if (routedConnection == connectionId && routedHostId == connection->hostId) {
+        // RPC traffic from an idle Mac does not redraw the selected Mac or
+        // serialize its saved host list. The UI's normal timer tracks liveness.
+        xSemaphoreTake(stateMutex, portMAX_DELAY);
+        state.lastHostRpcAtMs = connection->lastRpcAtMs;
+        xSemaphoreGive(stateMutex);
+    }
 }
 
 void Service::Impl::handleQuotaWrite(const WriteEvent& write)
@@ -2059,10 +2185,11 @@ void Service::Impl::handleQuotaWrite(const WriteEvent& write)
     }
 }
 
-void Service::Impl::processCommand(const Command& command)
+bool Service::Impl::processCommand(const Command& command)
 {
     if ((command.type == CommandType::kKey || command.type == CommandType::kJoystick) &&
-        command.controlEpoch != controlEpoch.load(std::memory_order_acquire)) return;
+        command.controlEpoch != controlEpoch.load(std::memory_order_acquire)) return true;
+    bool deferred = false;
     switch (command.type) {
         case CommandType::kSelectHost:
             if (hostSelection.selectHost(command.hostId)) usbResumePreference.manuallySelected(command.hostId);
@@ -2073,12 +2200,13 @@ void Service::Impl::processCommand(const Command& command)
             break;
         case CommandType::kKey:
             if (command.action != 0) {
-                if (sendKeyNow(command.key, command.action, command.agent)) {
+                if (sendKeyNow(command.key, command.action, command.agent, &deferred)) {
                     cancelOlderPendingRelease(command);
                 }
             } else if (std::any_of(heldKeys.begin(), heldKeys.end(), [&command](const HeldKey& held) {
                 return held.active && held.agent == command.agent && std::strcmp(held.key, command.key) == 0;
-            }) && !sendKeyNow(command.key, command.action, command.agent)) {
+            }) && !sendKeyNow(command.key, command.action, command.agent, &deferred)) {
+                if (deferred) return false;
                 const bool stillHeld = std::any_of(heldKeys.begin(), heldKeys.end(), [&command](const HeldKey& item) {
                     return item.active && item.agent == command.agent &&
                            std::strncmp(item.key, command.key, sizeof(item.key)) == 0;
@@ -2090,10 +2218,11 @@ void Service::Impl::processCommand(const Command& command)
             break;
         case CommandType::kJoystick:
             if (command.distance > 0.0f) {
-                if (sendJoystickNow(command.angle, command.distance)) {
+                if (sendJoystickNow(command.angle, command.distance, &deferred)) {
                     cancelOlderPendingRelease(command);
                 }
-            } else if (joystickHeld && !sendJoystickNow(command.angle, command.distance)) {
+            } else if (joystickHeld && !sendJoystickNow(command.angle, command.distance, &deferred)) {
+                if (deferred) return false;
                 schedulePendingRelease(command);
             }
             break;
@@ -2105,6 +2234,7 @@ void Service::Impl::processCommand(const Command& command)
             updateFridayConnectionIntervals(fridayTravelActive);
             break;
     }
+    return !deferred;
 }
 
 bool Service::Impl::processQueuedCommands()
@@ -2113,21 +2243,45 @@ bool Service::Impl::processQueuedCommands()
     for (size_t count = 0; count < 16; ++count) {
         Command normal{};
         Command release{};
-        const bool hasNormal  = xQueuePeek(commandQueue, &normal, 0) == pdTRUE;
+        const bool hasNormal = xQueuePeek(commandQueue, &normal, 0) == pdTRUE;
         const bool hasRelease = xQueuePeek(releaseQueue, &release, 0) == pdTRUE;
-        if (!hasNormal && !hasRelease) {
-            break;
-        }
+        if (!hasNormal && !hasRelease) break;
 
-        const bool chooseRelease =
-            hasRelease && (!hasNormal || static_cast<int32_t>(release.sequence - normal.sequence) < 0);
-        Command command{};
+        const bool chooseRelease = releaseHeadFirst(hasNormal, normal.sequence, hasRelease, release.sequence);
+        const Command& command = chooseRelease ? release : normal;
         QueueHandle_t source = chooseRelease ? releaseQueue : commandQueue;
-        if (xQueueReceive(source, &command, 0) != pdTRUE) {
-            continue;
+        const bool isControl = command.type == CommandType::kKey || command.type == CommandType::kJoystick;
+        ControlRouteStamp stamp{controlEpoch.load(std::memory_order_acquire), routedConnection, 0};
+        ControlAdmission admission = ControlAdmission::Dispatch;
+        if (isControl) {
+            Connection* route = routedConnection >= 0 ? findConnection(static_cast<uint16_t>(routedConnection)) : nullptr;
+            bool ready = route && route->active && route->secure && route->inputNotifications && route->rpcReady;
+            const bool usbRoute = route && route->usb;
+            if (usbRoute) {
+                stamp.linkEpoch = usbEpoch;
+                ready = ready && usb::mounted() && usbEpoch == usb::sessionEpoch();
+            } else if (route) {
+                stamp.linkEpoch = route->linkGeneration;
+                portENTER_CRITICAL(&callbackSessionMux);
+                ready = ready && callbackSessions.token(route->id, route->address) == route->linkGeneration;
+                portEXIT_CRITICAL(&callbackSessionMux);
+            }
+            admission = deferredControls.inspect(command.sequence, command.controlEpoch, stamp, ready, usbRoute,
+                                                  usb::serviceBudgetAvailable());
         }
-        didWork = true;
-        processCommand(command);
+        if (admission == ControlAdmission::Defer) break;
+        if (admission == ControlAdmission::Dispatch) {
+            const bool consumed = processCommand(command);
+            if (isControl) {
+                deferredControls.complete(command.sequence,
+                    consumed ? ControlAttempt::Consumed : ControlAttempt::DeferredBeforeAttempt, stamp);
+            }
+            if (!consumed) break;
+        }
+        // This task is the sole queue consumer. Producers can append while the
+        // head is attempted, but cannot replace it before this commit.
+        Command consumed{};
+        if (xQueueReceive(source, &consumed, 0) == pdTRUE) didWork = true;
     }
     return didWork;
 }
@@ -2162,6 +2316,10 @@ bool Service::Impl::processRpcTimeouts()
 {
     bool cleared               = false;
     const uint32_t currentTime = nowMs();
+    if (telemetryExpiresAtMs && static_cast<int32_t>(currentTime - telemetryExpiresAtMs) >= 0) {
+        publishTelemetry();
+        cleared = true;
+    }
     for (Connection& connection : connections) {
         if (!connection.rpcBuffer.empty() &&
             static_cast<uint32_t>(currentTime - connection.rpcLastFragmentAtMs) > kRpcAssemblyTimeoutMs) {
@@ -2250,7 +2408,7 @@ void Service::Impl::setBatteryNow(uint8_t percentage, bool isCharging)
     }
 }
 
-bool Service::Impl::sendKeyNow(const char* key, uint8_t action, int8_t agent)
+bool Service::Impl::sendKeyNow(const char* key, uint8_t action, int8_t agent, bool* deferredBeforeAttempt)
 {
     JsonDocument message;
     message["method"] = "v.oai.hid";
@@ -2262,7 +2420,8 @@ bool Service::Impl::sendKeyNow(const char* key, uint8_t action, int8_t agent)
     }
     std::string json;
     serializeJson(message, json);
-    const bool delivered     = sendJson(json);
+    const bool delivered     = sendJson(json, -1, deferredBeforeAttempt);
+    if (deferredBeforeAttempt && *deferredBeforeAttempt) return false;
     const bool hasSubscriber = routedConnection >= 0;
     if (delivered || (action != 0 && hasSubscriber)) {
         rememberKeyState(key, action, agent);
@@ -2271,7 +2430,7 @@ bool Service::Impl::sendKeyNow(const char* key, uint8_t action, int8_t agent)
     return delivered;
 }
 
-bool Service::Impl::sendJoystickNow(float angle, float distance)
+bool Service::Impl::sendJoystickNow(float angle, float distance, bool* deferredBeforeAttempt)
 {
     JsonDocument message;
     message["method"] = "v.oai.rad";
@@ -2280,7 +2439,8 @@ bool Service::Impl::sendJoystickNow(float angle, float distance)
     params["d"]       = distance;
     std::string json;
     serializeJson(message, json);
-    const bool delivered     = sendJson(json);
+    const bool delivered     = sendJson(json, -1, deferredBeforeAttempt);
+    if (deferredBeforeAttempt && *deferredBeforeAttempt) return false;
     const bool hasSubscriber = routedConnection >= 0;
     if (delivered || (distance > 0.0f && hasSubscriber)) {
         joystickHeld      = distance > 0.0f;
@@ -2379,23 +2539,29 @@ void Service::Impl::rememberKeyState(const char* key, uint8_t action, int8_t age
     std::strncpy(empty->key, key, sizeof(empty->key) - 1);
 }
 
-bool Service::Impl::sendJson(const std::string& json, int32_t targetConnection)
+bool Service::Impl::sendJson(const std::string& json, int32_t targetConnection, bool* deferredBeforeAttempt)
 {
+    if (deferredBeforeAttempt) *deferredBeforeAttempt = false;
     const int32_t endpoint = targetConnection >= 0 ? targetConnection : routedConnection;
     if (endpoint < 0) return false;
     Connection* connection = findConnection(static_cast<uint16_t>(endpoint));
     if (connection == nullptr) return false;
-    return sendJsonToConnection(json + "\n", *connection);
+    return sendJsonToConnection(json + "\n", *connection, deferredBeforeAttempt);
 }
 
-bool Service::Impl::sendJsonToConnection(const std::string& framed, Connection& connection)
+bool Service::Impl::sendJsonToConnection(const std::string& framed, Connection& connection, bool* deferredBeforeAttempt)
 {
     if (!connection.active || !connection.secure || !connection.inputNotifications || connection.congested ||
         connection.mtu < detail::kReportBodySize + 3) {
         return false;
     }
     if (connection.usb) {
-        if (!usb::serviceBudgetAvailable()) return false;
+        if (!usb::serviceBudgetAvailable()) {
+            // No report was attempted. Only this outcome may keep a queued
+            // physical input for the next worker iteration.
+            if (deferredBeforeAttempt) *deferredBeforeAttempt = true;
+            return false;
+        }
         return usb::sendFramedMessage(framed.data(), framed.size(),
             [this, &connection](const uint8_t* report) { return sendReport(report, connection); },
             [this] {
@@ -2483,6 +2649,7 @@ void Service::Impl::handleCallbackQueueLoss(bool controlLost, bool writeLost)
 
 void Service::Impl::handleReleaseQueueLoss()
 {
+    deferredControls.reset();
     // Drop queued presses before repairing releases. A press that has not yet
     // reached the host must not be delivered after its release was lost.
     xQueueReset(commandQueue);

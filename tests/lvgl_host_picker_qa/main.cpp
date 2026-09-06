@@ -144,8 +144,8 @@ DashboardModel previewModel()
     model.agents[3] = {0xF7AC42, 1.0f, false};
     model.agents[4] = {0xF55A68, 1.0f, false};
     model.hosts = {
-        {"a", "Office Mac", true, true, true, true},
-        {"b", "Travel MacBook", true, false, false, true},
+        {"a", "Mac W", true, true, true, true},
+        {"b", "Mac P", true, false, false, true},
         {"c", "Living Room Mac", false, false, false, false},
         {"d", "Studio Mac", false, false, false, false},
         {"e", "Test MacBook Pro", false, false, false, false},
@@ -292,11 +292,66 @@ int main(int argc, char** argv)
     assert(arcStrings().transport == "BLE");
     assert(arcStrings().battery == "100%");
 
+    // Use the actual route policy and pointer callbacks for the user's mixed
+    // topology: W remains plugged into USB while P is selected over BLE.
+    codex_micro::HostSelection selection;
+    selection.registerReady(7, codex_micro::Transport::Ble, "w", "Mac W");
+    selection.registerReady(8, codex_micro::Transport::Ble, "p", "Mac P");
+    selection.registerReady(65534, codex_micro::Transport::Usb, "w", "Mac W");
+    const auto projectSelection = [&] {
+        model.connectionText = selection.selectedName();
+        const auto route = selection.selectedRoute();
+        model.transportText = !route ? "Offline" : route->transport == codex_micro::Transport::Usb ? "USB" : "BLE";
+        model.hosts = selection.hosts();
+        view.update(model);
+        tick();
+    };
+    projectSelection();
+    tapConnection();
+    assert(view.popIntent(intent) && intent.type == TouchIntentType::DeviceMenuOpened);
+    assert(findLabel(lv_screen_active(), "USB + BLE") == nullptr);
+    assert(findLabel(lv_screen_active(), "USB") != nullptr);
+    assert(findLabel(lv_screen_active(), "BLE") != nullptr);
+    save(output, "devices-mixed");
+    // Both rows remain in their original order; repeated round trips must
+    // select the stable Mac ID without delivering any underlying Agent key.
+    for (int round = 0; round < 3; ++round) {
+        tap(180, 230);
+        assert(view.popIntent(intent) && intent.type == TouchIntentType::SelectHost);
+        assert(std::string(intent.hostId) == "p" && !view.popIntent(intent));
+        assert(selection.selectHost("p"));
+        selection.registerReady(65534, codex_micro::Transport::Usb, "w", "Mac W");
+        projectSelection();
+        view.closeDeviceMenu();
+        tick(); // Observe the lifted finger after route-change cancellation.
+        assert(arcStrings().host == "Mac P" && arcStrings().transport == "BLE");
+        tapConnection();
+        assert(view.popIntent(intent) && intent.type == TouchIntentType::DeviceMenuOpened);
+        tap(180, 150);
+        assert(view.popIntent(intent) && intent.type == TouchIntentType::SelectHost);
+        assert(std::string(intent.hostId) == "w" && !view.popIntent(intent));
+        assert(selection.selectHost("w"));
+        projectSelection();
+        view.closeDeviceMenu();
+        tick();
+        assert(arcStrings().host == "Mac W" && arcStrings().transport == "USB");
+        tapConnection();
+        assert(view.popIntent(intent) && intent.type == TouchIntentType::DeviceMenuOpened);
+    }
+    selection.disconnect(65534);
+    projectSelection();
+    view.closeDeviceMenu();
+    tick();
+    assert(arcStrings().host == "Mac W" && arcStrings().transport == "BLE");
+    selection.disconnect(7);
+    projectSelection();
+    assert(arcStrings().host == "Mac W" && arcStrings().transport == "Offline");
+
     model.hosts.clear();
     view.update(model);
     tapConnection();
     assert(view.deviceMenuOpen());
     save(output, "devices-empty");
-    std::puts("LVGL host picker: circular text bounds, original agent touch edges, real pointer input, modal isolation, offline selection, scroll and old-touch cancellation PASS");
+    std::puts("LVGL host picker: circular text bounds, Agent hit areas, modal isolation, mixed USB/BLE round trips, fallback, offline selection and old-touch cancellation PASS");
     return 0;
 }

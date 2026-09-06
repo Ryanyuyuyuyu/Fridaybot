@@ -1044,7 +1044,9 @@ void DashboardView::rebuildDeviceRows()
 
         auto* status = lv_label_create(row);
         makeTransparentLabel(status, &lv_font_montserrat_14, host.online ? kFiveHourColor : kSecondaryText);
-        const char* transport = host.usbAvailable ? (host.bleAvailable ? "USB + BLE" : "USB") : "BLE";
+        // USB is the route for this Mac whenever both links are ready. Showing
+        // two transports here incorrectly suggests simultaneous data routing.
+        const char* transport = host.usbAvailable ? "USB" : "BLE";
         lv_label_set_text(status, host.online ? transport : "Offline");
         lv_obj_set_pos(status, 16, 38);
         if (host.selected) {

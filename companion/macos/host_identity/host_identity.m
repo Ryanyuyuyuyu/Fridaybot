@@ -2,11 +2,13 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import "quota_reader.h"
+#import "power_policy.h"
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <IOKit/hid/IOHIDManager.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -70,6 +72,16 @@ static NSString *LocalMacName(void)
 {
     NSString *name = CFBridgingRelease(SCDynamicStoreCopyLocalHostName(NULL));
     return name.length ? name : @"Mac";
+}
+
+static NSData *RecentQuota(NSData *data, NSTimeInterval age)
+{
+    if (!data || !isfinite(age) || age < 0 || age >= CHQuotaMinimumIntervalSeconds) return nil;
+    id decoded = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:nil];
+    if (![decoded isKindOfClass:NSMutableDictionary.class] || ![decoded[@"reset_in_seconds"] isKindOfClass:NSNumber.class]) return nil;
+    double remaining = fmax(0, [decoded[@"reset_in_seconds"] doubleValue] - age);
+    decoded[@"reset_in_seconds"] = @((uint32_t)remaining);
+    return [NSJSONSerialization dataWithJSONObject:decoded options:NSJSONWritingSortedKeys error:nil];
 }
 
 static BOOL PreparePrivateDirectory(NSURL *directory, NSError **error)
@@ -257,18 +269,22 @@ static NSString *EffectiveDisplayName(NSURL *directory, NSError **error)
 - (instancetype)initWithHostID:(NSString *)hostID directory:(NSURL *)directory codexBin:(NSString *)codexBin;
 - (void)usbAttached:(IOHIDDeviceRef)device;
 - (void)usbRemoved:(IOHIDDeviceRef)device;
+- (void)hidAttached:(IOHIDDeviceRef)device;
+- (void)hidRemoved:(IOHIDDeviceRef)device;
 - (void)start;
 @end
 
 static void USBMatched(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
 {
     (void)sender;
-    if (result == kIOReturnSuccess) [(__bridge IdentityBridge *)context usbAttached:device];
+    @autoreleasepool {
+        if (result == kIOReturnSuccess) [(__bridge IdentityBridge *)context hidAttached:device];
+    }
 }
 static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDeviceRef device)
 {
     (void)result; (void)sender;
-    [(__bridge IdentityBridge *)context usbRemoved:device];
+    @autoreleasepool { [(__bridge IdentityBridge *)context hidRemoved:device]; }
 }
 
 @implementation IdentityBridge {
@@ -276,13 +292,18 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     NSURL *_directory;
     CBCentralManager *_central;
     NSMutableDictionary<NSUUID *, BLESession *> *_sessions;
-    NSMutableDictionary<NSUUID *, NSDate *> *_retryAfter;
     NSMutableDictionary<NSValue *, NSNumber *> *_usbStates;
     IOHIDManagerRef _usbManager;
     NSTimer *_timer;
     NSString *_codexBin;
-    BOOL _quotaReading;
-    NSTimeInterval _nextQuotaRead;
+    CHPowerPolicy _power;
+    NSTimeInterval _usbRetryAt;
+    NSTimeInterval _connectedProbeAt;
+    BOOL _tickQueued;
+    NSData *_cachedPayload;
+    NSData *_cachedQuota;
+    NSTimeInterval _cachedQuotaAt;
+    dispatch_source_t _nameWatch;
 }
 
 - (instancetype)initWithHostID:(NSString *)hostID directory:(NSURL *)directory codexBin:(NSString *)codexBin
@@ -293,38 +314,108 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
         _directory = directory;
         _codexBin = codexBin;
         _sessions = [NSMutableDictionary dictionary];
-        _retryAfter = [NSMutableDictionary dictionary];
         _usbStates = [NSMutableDictionary dictionary];
+        CHPowerInit(&_power, NSProcessInfo.processInfo.systemUptime);
     }
     return self;
 }
 
 - (void)start
 {
+    [self watchDisplayName];
+    [self reloadPayload];
+    [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(didWake:)
+                                                          name:NSWorkspaceDidWakeNotification object:nil];
     _central = [[CBCentralManager alloc] initWithDelegate:self queue:dispatch_get_main_queue()];
     _usbManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     NSDictionary *matching = @{@kIOHIDVendorIDKey: @(kVendorID), @kIOHIDProductIDKey: @(kProductID),
-                               @kIOHIDTransportKey: @"USB", @kIOHIDPrimaryUsagePageKey: @0xFF00,
+                               @kIOHIDPrimaryUsagePageKey: @0xFF00,
                                @kIOHIDPrimaryUsageKey: @1};
     IOHIDManagerSetDeviceMatching(_usbManager, (__bridge CFDictionaryRef)matching);
     IOHIDManagerRegisterDeviceMatchingCallback(_usbManager, USBMatched, (__bridge void *)self);
     IOHIDManagerRegisterDeviceRemovalCallback(_usbManager, USBRemoved, (__bridge void *)self);
     IOHIDManagerScheduleWithRunLoop(_usbManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
-    // Never seize the HID device: Codex must retain its report-6 connection.
+    // Watch native USB and BLE HID appearance without seizing or reading reports.
+    // Only a device whose transport is exactly USB receives Feature 7/8 writes.
     IOReturn status = IOHIDManagerOpen(_usbManager, kIOHIDOptionsTypeNone);
     if (status != kIOReturnSuccess) fprintf(stderr, "[USB] Manager open failed: 0x%08x\n", status);
-    _timer = [NSTimer scheduledTimerWithTimeInterval:5 target:self selector:@selector(tick:)
-                                           userInfo:nil repeats:YES];
+    [self requestTick];
     puts("[Identity] Waiting for compatible StopWatch firmware; no control events are generated.");
 }
 
-- (NSData *)payload
+- (void)reloadPayload
 {
     NSError *error = nil;
     NSString *name = EffectiveDisplayName(_directory, &error);
-    NSData *data = name ? IdentityData(_hostID, name, &error) : nil;
-    if (!data) fprintf(stderr, "[Identity] %s\n", error.localizedDescription.UTF8String);
-    return data;
+    _cachedPayload = name ? IdentityData(_hostID, name, &error) : nil;
+    if (!_cachedPayload) fprintf(stderr, "[Identity] %s\n", error.localizedDescription.UTF8String);
+}
+
+- (NSData *)payload { return _cachedPayload; }
+
+- (void)watchDisplayName
+{
+    if (_nameWatch) return;
+    int fd = open(_directory.fileSystemRepresentation, O_EVTONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return; // Recovery tick retries if the directory was replaced.
+    _nameWatch = dispatch_source_create(DISPATCH_SOURCE_TYPE_VNODE, (uintptr_t)fd,
+                                        DISPATCH_VNODE_WRITE | DISPATCH_VNODE_RENAME | DISPATCH_VNODE_DELETE,
+                                        dispatch_get_main_queue());
+    if (!_nameWatch) { close(fd); return; }
+    dispatch_source_set_cancel_handler(_nameWatch, ^{ close(fd); });
+    dispatch_source_set_event_handler(_nameWatch, ^{
+        @autoreleasepool {
+            unsigned long events = dispatch_source_get_data(self->_nameWatch);
+            if (events & (DISPATCH_VNODE_RENAME | DISPATCH_VNODE_DELETE)) {
+                dispatch_source_cancel(self->_nameWatch);
+                self->_nameWatch = nil;
+            }
+            NSData *previous = self->_cachedPayload;
+            [self reloadPayload];
+            if (![previous isEqual:self->_cachedPayload]) {
+                CHPowerRequestIdentity(&self->_power, NSProcessInfo.processInfo.systemUptime);
+                [self requestTick];
+            }
+            // File permissions/lock reads do not change directory entries, so
+            // they cannot recursively trigger this WRITE-only contents watch.
+        }
+    });
+    dispatch_resume(_nameWatch);
+}
+
+- (void)didWake:(NSNotification *)notification
+{
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            CHPowerWake(&self->_power, NSProcessInfo.processInfo.systemUptime);
+            [self reloadPayload];
+            [self requestTick];
+        }
+    });
+}
+
+- (void)hidAttached:(IOHIDDeviceRef)device
+{
+    NSString *transport = (__bridge NSString *)IOHIDDeviceGetProperty(device, CFSTR(kIOHIDTransportKey));
+    if ([transport isEqual:@"USB"]) [self usbAttached:device];
+    else {
+        // CBCentralManager connection-event registration is unavailable on
+        // macOS. Native BLE HID arrival provides an event without radio scans.
+        [self findConnected];
+        _connectedProbeAt = NSProcessInfo.processInfo.systemUptime + 2;
+        [self requestTick];
+    }
+}
+
+- (void)hidRemoved:(IOHIDDeviceRef)device
+{
+    NSString *transport = (__bridge NSString *)IOHIDDeviceGetProperty(device, CFSTR(kIOHIDTransportKey));
+    if ([transport isEqual:@"USB"]) [self usbRemoved:device];
+    else {
+        CHPowerDiscoveryLost(&_power, NSProcessInfo.processInfo.systemUptime);
+        [self requestTick];
+    }
 }
 
 - (void)usbAttached:(IOHIDDeviceRef)device
@@ -342,6 +433,8 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     CFRetain(device);
     _usbStates[key] = @NO;
     [self sendUSB:device payload:[self payload]];
+    [self findConnected]; // Keep the same Mac's already-connected BLE fallback identified.
+    [self requestTick];
 }
 
 - (void)usbRemoved:(IOHIDDeviceRef)device
@@ -351,6 +444,9 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     [_usbStates removeObjectForKey:key];
     CFRelease(device);
     puts("[USB] StopWatch detached.");
+    CHPowerDiscoveryLost(&_power, NSProcessInfo.processInfo.systemUptime);
+    [self findConnected];
+    [self requestTick];
 }
 
 - (void)sendUSB:(IOHIDDeviceRef)device payload:(NSData *)data
@@ -368,24 +464,93 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
         fprintf(stderr, "[USB] Identity report failed: 0x%08x (retrying every 5 seconds).\n", status);
     }
     _usbStates[key] = ready ? @1 : @(-1);
+    if (ready && !wasReady) [self quotaPathReady];
+    if (!ready) _usbRetryAt = NSProcessInfo.processInfo.systemUptime + CHUSBRetrySeconds;
+}
+
+- (CHPowerInputs)powerInputs
+{
+    CHPowerInputs inputs = {.bluetoothOn = _central.state == CBManagerStatePoweredOn,
+                            .usbReady = [self hasUSBIdentity]};
+    BOOL quotaReady = inputs.usbReady;
+    for (BLESession *session in _sessions.allValues) {
+        if (!session.closing) {
+            inputs.bleBusy = YES;
+            if (session.reportedReady && session.quota) quotaReady = YES;
+        }
+    }
+    inputs.quotaReady = _codexBin != nil && quotaReady;
+    return inputs;
+}
+
+- (void)requestTick
+{
+    if (_tickQueued) return;
+    _tickQueued = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_tickQueued = NO;
+        [self tick:nil];
+    });
+}
+
+- (void)scheduleTick
+{
+    [_timer invalidate];
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    double deadline = CHPowerNextDeadline(&_power, [self powerInputs]);
+    if (_usbRetryAt > 0) deadline = fmin(deadline, _usbRetryAt);
+    if (_connectedProbeAt > 0) deadline = fmin(deadline, _connectedProbeAt);
+    for (BLESession *session in _sessions.allValues) {
+        if (session.closing) continue;
+        if (session.deadline) deadline = fmin(deadline, now + session.deadline.timeIntervalSinceNow);
+        if (session.quotaDeadline) deadline = fmin(deadline, now + session.quotaDeadline.timeIntervalSinceNow);
+    }
+    NSTimeInterval delay = fmax(0.01, deadline - now);
+    _timer = [NSTimer scheduledTimerWithTimeInterval:delay target:self selector:@selector(tick:)
+                                           userInfo:nil repeats:NO];
+    _timer.tolerance = fmin(0.5, delay * 0.1);
 }
 
 - (void)tick:(NSTimer *)timer
 {
     (void)timer;
-    NSData *data = [self payload];
-    for (NSValue *key in _usbStates.allKeys) [self sendUSB:(IOHIDDeviceRef)key.pointerValue payload:data];
-    for (BLESession *session in _sessions.allValues) {
-        if (((session.deadline && [session.deadline timeIntervalSinceNow] < 0) ||
-             (session.quotaDeadline && [session.quotaDeadline timeIntervalSinceNow] < 0)) && !session.closing) {
-            fprintf(stderr, "[BLE] Identity handshake timeout for %s.\n", session.peripheral.identifier.UUIDString.UTF8String);
-            [self closeSession:session];
-        } else if (session.identity && !session.pending && !session.closing) {
-            [self sendBLE:session payload:data];
+    @autoreleasepool {
+        NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+        for (BLESession *session in _sessions.allValues) {
+            if (((session.deadline && session.deadline.timeIntervalSinceNow <= 0) ||
+                 (session.quotaDeadline && session.quotaDeadline.timeIntervalSinceNow <= 0)) && !session.closing) {
+                fprintf(stderr, "[BLE] Identity handshake timeout for %s.\n", session.peripheral.identifier.UUIDString.UTF8String);
+                [self closeSession:session];
+            }
         }
+        if (now >= _power.nextRecoveryAt || (_connectedProbeAt > 0 && now >= _connectedProbeAt)) {
+            _connectedProbeAt = 0;
+            [self findConnected]; // Also works while USB is active; never requires a radio scan.
+            if (!_nameWatch) { [self reloadPayload]; [self watchDisplayName]; }
+        }
+        CHPowerActions actions = CHPowerEvaluate(&_power, now, [self powerInputs]);
+        if (actions.stopScan && _central.isScanning) [_central stopScan];
+        if (actions.startScan) [_central scanForPeripheralsWithServices:@[ServiceUUID()]
+                                       options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @NO}];
+        BOOL retryUSB = _usbRetryAt > 0 && now >= _usbRetryAt;
+        if (actions.recoverIdentity || retryUSB) {
+            NSData *data = [self payload];
+            for (NSValue *key in _usbStates.allKeys) {
+                if (actions.recoverIdentity || _usbStates[key].integerValue != 1)
+                    [self sendUSB:(IOHIDDeviceRef)key.pointerValue payload:data];
+            }
+            if (actions.recoverIdentity) {
+                for (BLESession *session in _sessions.allValues)
+                    if (session.identity) [self sendBLE:session payload:data];
+            }
+        }
+        BOOL failedUSB = NO;
+        for (NSNumber *state in _usbStates.allValues) if (state.integerValue != 1) failedUSB = YES;
+        if (!failedUSB) _usbRetryAt = 0;
+        else if (_usbRetryAt <= now) _usbRetryAt = now + CHUSBRetrySeconds;
+        if (actions.readQuota) [self readQuota];
+        [self scheduleTick];
     }
-    [self findConnected];
-    [self refreshQuotaIfReady];
 }
 
 - (void)findConnected
@@ -394,8 +559,6 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     for (CBPeripheral *peripheral in [_central retrieveConnectedPeripheralsWithServices:@[ServiceUUID()]]) {
         [self connect:peripheral];
     }
-    if (!_central.isScanning) [_central scanForPeripheralsWithServices:@[ServiceUUID()]
-                                options:@{CBCentralManagerScanOptionAllowDuplicatesKey: @YES}];
 }
 
 - (BOOL)hasUSBIdentity
@@ -404,25 +567,32 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     return NO;
 }
 
-- (void)refreshQuotaIfReady
+- (void)quotaPathReady
 {
-    if (!_codexBin || _quotaReading || NSProcessInfo.processInfo.systemUptime < _nextQuotaRead) return;
-    BOOL ready = [self hasUSBIdentity];
-    for (BLESession *session in _sessions.allValues) if (session.reportedReady && !session.closing && session.quota) ready = YES;
-    if (!ready) return;
-    _quotaReading = YES;
-    _nextQuotaRead = NSProcessInfo.processInfo.systemUptime + 60;
+    NSData *recent = RecentQuota(_cachedQuota, NSDate.date.timeIntervalSince1970 - _cachedQuotaAt);
+    if (recent) [self deliverQuota:recent];
+    CHPowerNewQuotaPath(&_power, NSProcessInfo.processInfo.systemUptime);
+}
+
+- (void)readQuota
+{
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        NSError *error = nil;
-        NSData *data = ReadCodexQuota(self->_codexBin, &error);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_quotaReading = NO;
-            if (!data) {
-                fprintf(stderr, "[Quota] %s (next attempt in 60 seconds).\n", error.localizedDescription.UTF8String);
-                return;
-            }
-            [self deliverQuota:data];
-        });
+        @autoreleasepool {
+            NSError *error = nil;
+            NSData *data = ReadCodexQuota(self->_codexBin, &error);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                @autoreleasepool {
+                    CHPowerQuotaFinished(&self->_power);
+                    if (!data) fprintf(stderr, "[Quota] %s (next attempt in 180 seconds).\n", error.localizedDescription.UTF8String);
+                    else {
+                        self->_cachedQuota = data;
+                        self->_cachedQuotaAt = NSDate.date.timeIntervalSince1970;
+                        [self deliverQuota:data];
+                    }
+                    [self requestTick];
+                }
+            });
+        }
     });
 }
 
@@ -452,25 +622,29 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
 
 - (void)connect:(CBPeripheral *)peripheral
 {
-    if (_sessions[peripheral.identifier] || [_retryAfter[peripheral.identifier] timeIntervalSinceNow] > 0) return;
+    if (_sessions[peripheral.identifier] || _central.state != CBManagerStatePoweredOn) return;
     BLESession *session = [BLESession new];
     session.peripheral = peripheral;
-    session.deadline = [NSDate dateWithTimeIntervalSinceNow:30];
+    session.deadline = [NSDate dateWithTimeIntervalSinceNow:CHHandshakeSeconds];
     _sessions[peripheral.identifier] = session;
     peripheral.delegate = self;
     [_central connectPeripheral:peripheral options:nil];
+    [self requestTick];
 }
 
 - (void)closeSession:(BLESession *)session
 {
     session.closing = YES;
-    _retryAfter[session.peripheral.identifier] = [NSDate dateWithTimeIntervalSinceNow:15];
+    if (_central.isScanning) [_central stopScan];
+    CHPowerDiscoveryFailed(&_power, NSProcessInfo.processInfo.systemUptime);
     [_central cancelPeripheralConnection:session.peripheral];
+    [self requestTick];
 }
 
 - (void)centralManagerDidUpdateState:(CBCentralManager *)central
 {
     if (central.state == CBManagerStatePoweredOn) {
+        CHPowerDiscoveryLost(&_power, NSProcessInfo.processInfo.systemUptime);
         [self findConnected];
     } else {
         [_sessions removeAllObjects];
@@ -482,6 +656,7 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
             puts("[BLE] Bluetooth is unsupported on this Mac; USB discovery remains available.");
         }
     }
+    [self requestTick];
 }
 
 - (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral
@@ -496,6 +671,7 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     (void)central;
     // Rediscover the service database after firmware upgrades (macOS caches GATT).
     [peripheral discoverServices:nil];
+    [self requestTick];
 }
 
 - (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error
@@ -503,15 +679,19 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
     (void)central;
     fprintf(stderr, "[BLE] Connection failed: %s\n", error.localizedDescription.UTF8String ?: "unknown error");
     [_sessions removeObjectForKey:peripheral.identifier];
-    _retryAfter[peripheral.identifier] = [NSDate dateWithTimeIntervalSinceNow:15];
+    if (_central.isScanning) [_central stopScan];
+    CHPowerDiscoveryFailed(&_power, NSProcessInfo.processInfo.systemUptime);
+    [self requestTick];
 }
 
 - (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error
 {
     (void)central;
     fprintf(stderr, "[BLE] Disconnected: %s\n", error.localizedDescription.UTF8String ?: "connection closed");
+    BOOL recoveringFailure = _sessions[peripheral.identifier].closing;
     [_sessions removeObjectForKey:peripheral.identifier];
-    _retryAfter[peripheral.identifier] = [NSDate dateWithTimeIntervalSinceNow:15];
+    if (!recoveringFailure) CHPowerDiscoveryLost(&_power, NSProcessInfo.processInfo.systemUptime);
+    [self requestTick];
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error
@@ -562,6 +742,8 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
             }
         }
         if (!session.quota) puts("[BLE] Quota characteristic unavailable; host identity remains usable.");
+        else if (session.reportedReady) [self quotaPathReady];
+        [self requestTick];
     }
 }
 
@@ -574,9 +756,10 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
         return;
     }
     session.pending = YES;
-    session.deadline = [NSDate dateWithTimeIntervalSinceNow:30];
+    session.deadline = [NSDate dateWithTimeIntervalSinceNow:CHHandshakeSeconds];
     // Firmware requires encryption. CoreBluetooth negotiates pairing as needed.
     [session.peripheral writeValue:data forCharacteristic:session.identity type:CBCharacteristicWriteWithResponse];
+    [self requestTick];
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didWriteValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error
@@ -587,6 +770,7 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
         session.quotaPending = NO;
         session.quotaDeadline = nil;
         if (error) fprintf(stderr, "[BLE] Quota write failed: %s\n", error.localizedDescription.UTF8String);
+        [self requestTick];
         return;
     }
     if (![characteristic.UUID isEqual:IdentityUUID()]) return;
@@ -597,8 +781,13 @@ static void USBRemoved(void *context, IOReturn result, void *sender, IOHIDDevice
         return;
     }
     session.deadline = nil;
-    if (!session.reportedReady) puts("[BLE] Identity accepted on encrypted characteristic; firmware decides the active host.");
-    session.reportedReady = YES;
+    if (!session.reportedReady) {
+        puts("[BLE] Identity accepted on encrypted characteristic; firmware decides the active host.");
+        CHPowerDiscoveryLost(&_power, NSProcessInfo.processInfo.systemUptime);
+        session.reportedReady = YES;
+        [self quotaPathReady];
+    }
+    [self requestTick];
 }
 @end
 
@@ -710,6 +899,18 @@ static int SelfTest(void)
     if (!okay) { fprintf(stderr, "Self-test: persistent identity validation failed.\n"); return 1; }
     if (!TestQuotaEncoding()) { fprintf(stderr, "Self-test: quota encoding failed.\n"); return 1; }
     checks += 5;
+    NSData *quota = [NSJSONSerialization dataWithJSONObject:@{@"version": @1, @"remaining_percent": @50, @"reset_in_seconds": @10}
+                                                  options:0 error:nil];
+    NSDictionary *aged = [NSJSONSerialization JSONObjectWithData:RecentQuota(quota, 2.5) options:0 error:nil];
+    if (![aged[@"reset_in_seconds"] isEqual:@7] || ![aged[@"remaining_percent"] isEqual:@50]) return 1;
+    ++checks;
+    aged = [NSJSONSerialization JSONObjectWithData:RecentQuota(quota, 15) options:0 error:nil];
+    if (![aged[@"reset_in_seconds"] isEqual:@0]) return 1;
+    ++checks;
+    if (RecentQuota(quota, CHQuotaMinimumIntervalSeconds) != nil) return 1;
+    ++checks;
+    if (RecentQuota(quota, -1) != nil || RecentQuota(quota, NAN) != nil) return 1;
+    ++checks;
     NSUInteger nameChecks = 0;
     if (!TestDisplayNames(&nameChecks)) return 1;
     checks += nameChecks;

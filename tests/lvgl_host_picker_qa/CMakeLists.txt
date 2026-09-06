@@ -11,6 +11,7 @@ add_subdirectory("${QA_REPO_ROOT}/components/lvgl" lvgl-build)
 
 add_executable(host_picker_qa
     main.cpp
+    "${QA_REPO_ROOT}/main/services/codex_micro/host_selection.cpp"
     "${QA_REPO_ROOT}/main/apps/app_codex_micro/view/view.cpp"
     "${QA_REPO_ROOT}/main/assets/fonts/MontserratSemiBold26.c")
 target_include_directories(host_picker_qa PRIVATE

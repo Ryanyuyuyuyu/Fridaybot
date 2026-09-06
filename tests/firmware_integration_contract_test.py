@@ -341,7 +341,7 @@ def test_codex_ui_source_fingerprint(root: Path, contract: Contract) -> None:
         "main/apps/app_codex_micro/app_codex_micro.h":
             "d28e3cf1caa41d73627f264c0ac15a0a456937a09d022b5567cf9f57643cec1f",
         "main/apps/app_codex_micro/view/view.cpp":
-            "a4cdee0ae40c76aec2fc502388b78b459329fe48ba124b3008ba9d171ccd6fa9",
+            "a8a5d7a48b46147d249168a7b888f0f3603bd8cd7867f3fceca18c61e1bb16fc",
         "main/apps/app_codex_micro/view/view.h":
             "845e46f8d7119fc74ebe60154617dd0ecc4153ea045dab9e1abdce5e95cdcbcb",
     }

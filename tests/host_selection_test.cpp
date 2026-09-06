@@ -1,6 +1,7 @@
 #include "../main/services/codex_micro/host_selection.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <string>
 
@@ -295,8 +296,102 @@ void invalidHandshakeLeavesSelectionUntouched()
     assert(!selection.registerReady(kUsb, Transport::Usb, kMacB,
                                     std::string(HostSelection::kMaxHostNameBytes + 1, 'b')));
     assert(!selection.restorePreferredHost(std::string("bad\0id", 6), "Mac"));
+    assert(!selection.registerReady(-1, Transport::Usb, kMacB, "Invalid endpoint"));
     expectRoute(selection, kMacA, Transport::Ble, 10);
     assert(selection.hosts().size() == 1);
+}
+
+void privateAndWorkAvailabilityMatrix()
+{
+    // Both names are explicit fixtures, never inferred from USB presence or
+    // connection order. Bits describe each Mac: 1 = BLE, 2 = USB.
+    const std::array<std::string, 2> ids{kMacA, kMacB};
+    const std::array<std::string, 2> names{"Mac P", "Mac W"};
+    struct Ready {
+        int host;
+        HostRoute route;
+    };
+    for (unsigned privateLinks = 0; privateLinks < 4; ++privateLinks) {
+        for (unsigned workLinks = 0; workLinks < 4; ++workLinks) {
+            if ((privateLinks & 2) && (workLinks & 2)) continue;  // One physical USB port.
+            const std::array<unsigned, 2> links{privateLinks, workLinks};
+            std::vector<Ready> routes;
+            for (int host = 0; host < 2; ++host) {
+                if (links[host] & 1) routes.push_back({host, {Transport::Ble, 10 + host}});
+                if (links[host] & 2) routes.push_back({host, {Transport::Usb, kUsb}});
+            }
+            std::vector<size_t> order;
+            for (size_t i = 0; i < routes.size(); ++i) order.push_back(i);
+            do {
+                HostSelection initial;
+                for (int host = 0; host < 2; ++host) assert(initial.rememberHost(ids[host], names[host]));
+                for (size_t index : order) {
+                    const auto& ready = routes[index];
+                    assert(initial.registerReady(ready.route.endpoint, ready.route.transport, ids[ready.host], names[ready.host]));
+                }
+                if ((privateLinks | workLinks) & 2) {
+                    const int usbHost = privateLinks & 2 ? 0 : 1;
+                    expectRoute(initial, ids[usbHost], Transport::Usb, kUsb);
+                } else if (!order.empty()) {
+                    const auto& first = routes[order.front()];
+                    expectRoute(initial, ids[first.host], first.route.transport, first.route.endpoint);
+                } else {
+                    assert(initial.selectedHostId().empty() && !initial.selectedRoute());
+                }
+
+                for (int chosen = 0; chosen < 2; ++chosen) {
+                    auto selection = initial;
+                    assert(selection.selectHost(ids[chosen]));
+                    const auto expectChosen = [&] {
+                        assert(selection.selectedHostId() == ids[chosen]);
+                        assert(selection.selectedName() == names[chosen]);
+                        if (links[chosen] & 2) expectRoute(selection, ids[chosen], Transport::Usb, kUsb);
+                        else if (links[chosen] & 1) expectRoute(selection, ids[chosen], Transport::Ble, 10 + chosen);
+                        else assert(!selection.selectedRoute());
+                        for (int host = 0; host < 2; ++host) {
+                            const auto info = hostInfo(selection, ids[host]);
+                            assert(info.name == names[host] && info.selected == (host == chosen));
+                            assert(info.online == (links[host] != 0));
+                            assert(info.bleAvailable == ((links[host] & 1) != 0));
+                            assert(info.usbAvailable == ((links[host] & 2) != 0));
+                        }
+                    };
+                    expectChosen();
+                    // Continuous identity/RPC keepalives in either arrival
+                    // order cannot steal an explicit choice, even offline P
+                    // while W remains attached through USB.
+                    for (unsigned heartbeat = 0; heartbeat < 32; ++heartbeat) {
+                        for (auto index = order.rbegin(); index != order.rend(); ++index) {
+                            const auto& ready = routes[*index];
+                            assert(selection.registerReady(ready.route.endpoint, ready.route.transport,
+                                                            ids[ready.host], names[ready.host]));
+                        }
+                        expectChosen();
+                    }
+                    if (links[chosen] & 2) {
+                        assert(selection.disconnect(kUsb));
+                        if (links[chosen] & 1) expectRoute(selection, ids[chosen], Transport::Ble, 10 + chosen);
+                        else assert(!selection.selectedRoute());
+                    }
+                    for (const auto& ready : routes) selection.disconnect(ready.route.endpoint);
+                    assert(selection.selectedHostId() == ids[chosen] && !selection.selectedRoute());
+                    assert(!hostInfo(selection, ids[0]).online && !hostInfo(selection, ids[1]).online);
+                    assert(selection.registerReady(20, Transport::Ble, ids[1 - chosen], names[1 - chosen]));
+                    assert(!selection.selectedRoute());
+                    assert(selection.registerReady(21, Transport::Ble, ids[chosen], names[chosen]));
+                    expectRoute(selection, ids[chosen], Transport::Ble, 21);
+
+                    HostSelection rebooted;
+                    for (const auto& host : selection.hosts()) assert(rebooted.rememberHost(host.id, host.name));
+                    assert(rebooted.restorePreferredHost(selection.preferredHostId(), selection.selectedName()));
+                    assert(rebooted.registerReady(30, Transport::Ble, ids[1 - chosen], names[1 - chosen]));
+                    assert(rebooted.selectedHostId() == ids[chosen] && !rebooted.selectedRoute());
+                    assert(rebooted.registerReady(31, Transport::Ble, ids[chosen], names[chosen]));
+                    expectRoute(rebooted, ids[chosen], Transport::Ble, 31);
+                }
+            } while (std::next_permutation(order.begin(), order.end()));
+        }
+    }
 }
 
 }  // namespace
@@ -314,5 +409,6 @@ int main()
     explicitMigrationPreservesOtherHostSelectionAndCapacity();
     rememberedHostsAndRoutesStayBounded();
     invalidHandshakeLeavesSelectionUntouched();
+    privateAndWorkAvailabilityMatrix();
     return 0;
 }
