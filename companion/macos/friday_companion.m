@@ -7,8 +7,6 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <Foundation/Foundation.h>
-#import "friday_capsule_inbox.h"
-#import "friday_capsule_store.h"
 #import "friday_overlay.h"
 #include <signal.h>
 
@@ -25,16 +23,6 @@ static CBUUID *FridayContextUUID(void)
 static CBUUID *FridayTransferUUID(void)
 {
     return [CBUUID UUIDWithString:@"46524944-4159-0003-8000-00805F9B34FB"];
-}
-
-static CBUUID *FridayCapsuleDataUUID(void)
-{
-    return [CBUUID UUIDWithString:@"46524944-4159-0004-8000-00805F9B34FB"];
-}
-
-static CBUUID *FridayCapsuleAckUUID(void)
-{
-    return [CBUUID UUIDWithString:@"46524944-4159-0005-8000-00805F9B34FB"];
 }
 
 typedef NS_ENUM(uint8_t, FridayTravelCommand) {
@@ -263,13 +251,11 @@ typedef struct {
 
 @interface FridayBluetooth : NSObject <CBCentralManagerDelegate, CBPeripheralDelegate>
 @property(nonatomic, copy) void (^onTravelPacket)(FridayTravelPacket packet);
-@property(nonatomic, copy) void (^onCapsulePacket)(NSData *packet);
 @property(nonatomic, copy) void (^onDisconnected)(void);
 - (void)updateState:(FridayHostState)state direction:(FridayMonitorDirection)direction;
 - (void)sendTravelCommand:(FridayTravelCommand)command
                  direction:(FridayTravelDirection)direction
                   sequence:(uint8_t)sequence;
-- (void)sendCapsuleAcknowledgement:(NSData *)packet;
 - (void)stop;
 @end
 
@@ -278,8 +264,6 @@ typedef struct {
     CBPeripheral *_peripheral;
     CBCharacteristic *_contextCharacteristic;
     CBCharacteristic *_transferCharacteristic;
-    CBCharacteristic *_capsuleDataCharacteristic;
-    CBCharacteristic *_capsuleAckCharacteristic;
     FridayHostState _pendingState;
     FridayMonitorDirection _pendingDirection;
     BOOL _hasPendingState;
@@ -409,8 +393,6 @@ didDisconnectPeripheral:(CBPeripheral *)peripheral
     _peripheral = nil;
     _contextCharacteristic = nil;
     _transferCharacteristic = nil;
-    _capsuleDataCharacteristic = nil;
-    _capsuleAckCharacteristic = nil;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         [self findOrScan];
     });
@@ -459,22 +441,16 @@ didDiscoverCharacteristicsForService:(CBService *)service
             _contextCharacteristic = characteristic;
         } else if ([characteristic.UUID isEqual:FridayTransferUUID()]) {
             _transferCharacteristic = characteristic;
-        } else if ([characteristic.UUID isEqual:FridayCapsuleDataUUID()]) {
-            _capsuleDataCharacteristic = characteristic;
-        } else if ([characteristic.UUID isEqual:FridayCapsuleAckUUID()]) {
-            _capsuleAckCharacteristic = characteristic;
         }
     }
-    if (_contextCharacteristic == nil || _transferCharacteristic == nil ||
-        _capsuleDataCharacteristic == nil || _capsuleAckCharacteristic == nil) {
-        puts("[BLE] Friday context, travel, or Flash Capsule characteristic is missing");
+    if (_contextCharacteristic == nil || _transferCharacteristic == nil) {
+        puts("[BLE] Friday context or travel characteristic is missing");
         [_central cancelPeripheralConnection:peripheral];
         return;
     }
     ++_connectionGeneration;
-    puts("[BLE] Friday channels discovered");
+    puts("[BLE] Context channel ready");
     [peripheral setNotifyValue:YES forCharacteristic:_transferCharacteristic];
-    [peripheral setNotifyValue:YES forCharacteristic:_capsuleDataCharacteristic];
     [self flushPending];
 }
 
@@ -483,18 +459,14 @@ didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic
              error:(NSError *)error
 {
     (void)peripheral;
-    const BOOL travel = [characteristic.UUID isEqual:FridayTransferUUID()];
-    const BOOL capsule = [characteristic.UUID isEqual:FridayCapsuleDataUUID()];
-    if (!travel && !capsule) {
+    if (![characteristic.UUID isEqual:FridayTransferUUID()]) {
         return;
     }
     if (error != nil) {
-        printf("[BLE] %s notification setup failed: %s\n", travel ? "Travel" : "Capsule",
-               error.localizedDescription.UTF8String);
+        printf("[BLE] Travel notification setup failed: %s\n", error.localizedDescription.UTF8String);
         return;
     }
-    printf("[BLE] %s channel %s\n", travel ? "Travel" : "Capsule",
-           characteristic.isNotifying ? "ready" : "disabled");
+    printf("[BLE] Travel channel %s\n", characteristic.isNotifying ? "ready" : "disabled");
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral
@@ -502,16 +474,6 @@ didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
              error:(NSError *)error
 {
     (void)peripheral;
-    if ([characteristic.UUID isEqual:FridayCapsuleDataUUID()]) {
-        if (error != nil) {
-            printf("[BLE] Capsule notification failed: %s\n", error.localizedDescription.UTF8String);
-            return;
-        }
-        if (self.onCapsulePacket != nil && characteristic.value != nil) {
-            self.onCapsulePacket(characteristic.value);
-        }
-        return;
-    }
     if (![characteristic.UUID isEqual:FridayTransferUUID()]) {
         return;
     }
@@ -529,16 +491,6 @@ didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
     if (self.onTravelPacket != nil) {
         self.onTravelPacket(packet);
     }
-}
-
-- (void)sendCapsuleAcknowledgement:(NSData *)packet
-{
-    if (_peripheral == nil || _capsuleAckCharacteristic == nil || packet.length == 0) {
-        puts("[BLE] Cannot acknowledge Flash Capsule; channel is unavailable");
-        return;
-    }
-    [_peripheral writeValue:packet forCharacteristic:_capsuleAckCharacteristic
-                       type:CBCharacteristicWriteWithResponse];
 }
 
 - (void)updateState:(FridayHostState)state direction:(FridayMonitorDirection)direction
@@ -600,8 +552,6 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
         printf("[BLE] Context write failed: %s\n", error.localizedDescription.UTF8String);
     } else if ([characteristic.UUID isEqual:FridayTransferUUID()] && error != nil) {
         printf("[BLE] Travel write failed: %s\n", error.localizedDescription.UTF8String);
-    } else if ([characteristic.UUID isEqual:FridayCapsuleAckUUID()] && error != nil) {
-        printf("[BLE] Capsule acknowledgement failed: %s\n", error.localizedDescription.UTF8String);
     }
 }
 @end
@@ -618,8 +568,6 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
     FridayPresenceDetector *_detector;
     FridayBluetooth *_bluetooth;
     FridayOverlayController *_overlay;
-    FridayCapsuleStore *_capsuleStore;
-    FridayCapsuleInboxController *_capsuleInbox;
     BOOL _hasPrintedState;
     FridayHostState _lastPrintedState;
     BOOL _hasPendingTravel;
@@ -634,37 +582,18 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
     if (self != nil) {
         _configuration = configuration;
         _detector = [[FridayPresenceDetector alloc] init];
-        _capsuleStore = [[FridayCapsuleStore alloc] init];
-        _capsuleInbox = [[FridayCapsuleInboxController alloc] initWithStore:_capsuleStore];
-        __weak FridayController *weakSelf = self;
-        _capsuleStore.onItemsChanged = ^{
-            FridayController *strongSelf = weakSelf;
-            [strongSelf->_capsuleInbox refresh];
-        };
-        _capsuleStore.onFeedback = ^(FridayCapsuleFeedbackState state, CGFloat progress) {
-            FridayController *strongSelf = weakSelf;
-            [strongSelf->_overlay setCapsuleState:state progress:progress];
-        };
         if (!configuration.dryRun) {
             _bluetooth = [[FridayBluetooth alloc] init];
             if (configuration.overlayEnabled) {
                 _overlay = [[FridayOverlayController alloc] init];
             }
+            __weak FridayController *weakSelf = self;
             _bluetooth.onTravelPacket = ^(FridayTravelPacket packet) {
                 [weakSelf handleTravelPacket:packet];
-            };
-            _bluetooth.onCapsulePacket = ^(NSData *packet) {
-                FridayController *strongSelf = weakSelf;
-                [strongSelf->_capsuleStore handlePacket:packet];
-            };
-            _capsuleStore.sendAcknowledgement = ^(NSData *packet) {
-                FridayController *strongSelf = weakSelf;
-                [strongSelf->_bluetooth sendCapsuleAcknowledgement:packet];
             };
             _bluetooth.onDisconnected = ^{
                 FridayController *strongSelf = weakSelf;
                 [strongSelf->_overlay dismissImmediately];
-                [strongSelf->_capsuleStore abortActiveCapture];
                 strongSelf->_hasPendingTravel = NO;
                 strongSelf->_hasActiveTravel = NO;
             };
@@ -772,7 +701,6 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
 - (void)tick:(NSTimer *)timer
 {
     (void)timer;
-    [_capsuleStore expireStaleCapture];
     FridayPresenceSample sample = [_detector sample];
     if (_configuration.hasForcedState) {
         sample.state = _configuration.forcedState;
@@ -791,7 +719,6 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
     puts("\nFriday Companion is stopping; releasing the BLE connection…");
     [_bluetooth stop];
     [_overlay dismissImmediately];
-    [_capsuleStore abortActiveCapture];
 }
 @end
 

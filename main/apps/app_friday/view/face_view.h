@@ -14,14 +14,6 @@
 
 namespace friday::view {
 
-enum class CapsuleVisualState : uint8_t {
-    Hidden,
-    Recording,
-    AwaitingSave,
-    Saved,
-    Failed,
-};
-
 enum class TouchGesture : uint8_t {
     Tap,
     Hold,
@@ -45,7 +37,6 @@ public:
     void init(lv_obj_t* parent);
     void setPose(const FacePose& pose);
     void setFaceVisible(bool visible);
-    void setCapsuleVisual(CapsuleVisualState state, float progress);
 
 private:
     struct RenderedEye {
@@ -59,7 +50,6 @@ private:
     std::unique_ptr<uitk::lvgl_cpp::Container> _left_eye;
     std::unique_ptr<uitk::lvgl_cpp::Container> _right_eye;
     std::unique_ptr<uitk::lvgl_cpp::Container> _touch_surface;
-    lv_obj_t* _capsule_arc = nullptr;
     RenderedEye _rendered_left;
     RenderedEye _rendered_right;
     lv_point_t _touch_start{};
@@ -68,7 +58,6 @@ private:
     bool _touch_tracking     = false;
     bool _touch_dragged      = false;
     bool _face_visible       = true;
-    CapsuleVisualState _capsule_state = CapsuleVisualState::Hidden;
 
     void configureEye(uitk::lvgl_cpp::Container& eye);
     void applyEye(uitk::lvgl_cpp::Container& eye, RenderedEye& rendered, int width, int height, int x, int y);

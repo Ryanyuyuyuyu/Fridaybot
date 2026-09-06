@@ -29,7 +29,6 @@ void AppFriday::onCreate()
 {
     mclog::tagInfo(getAppInfo().name, "on create");
     friday::context::ContextLink::instance().start();
-    friday::capsule::CapsuleLink::instance().start();
 }
 
 void AppFriday::onOpen()
@@ -60,17 +59,6 @@ void AppFriday::onOpen()
     _host_accepted           = false;
     _departure_announced     = false;
     _face_visible            = true;
-    _capsule_state           = CapsuleState::Idle;
-    _capsule_session         = 0;
-    _capsule_sequence        = 0;
-    _capsule_started_ms      = 0;
-    _capsule_deadline_ms     = 0;
-    _capsule_feedback_until_ms = 0;
-    _capsule_total_samples   = 0;
-    friday_capsule_adpcm_reset(&_capsule_adpcm);
-    _capsule_input.clear();
-    _capsule_input.reserve(882);
-    _last_capsule_ack_generation = friday::capsule::CapsuleLink::instance().ackSnapshot().generation;
     _last_transfer_generation = friday::context::ContextLink::instance().transferSnapshot().generation;
 
     LvglLockGuard lock;
@@ -100,7 +88,6 @@ void AppFriday::onRunning()
     const uint32_t now = GetHAL().millis();
     updatePresenceTransfer(now);
     handleInputs(now);
-    updateCapsule(GetHAL().millis());
     if (currentState() != mooncake::AppAbility::StateRunning) {
         return;
     }
@@ -131,7 +118,6 @@ void AppFriday::onRunning()
         if (_view) {
             _view->setPose(_face_model.pose());
             _view->setFaceVisible(_face_visible);
-            updateCapsuleVisual(now);
         }
     }
 
@@ -356,11 +342,6 @@ void AppFriday::onClose()
 
     _touch_active    = false;
     _gesture_pending = 0;
-    if (_capsule_state == CapsuleState::Recording) {
-        finishCapsule(FridayCapsuleEndCanceled, GetHAL().millis());
-    }
-    friday::capsule::CapsuleLink::instance().setStreamingActive(false);
-    _capsule_state = CapsuleState::Idle;
     _key_manager.reset();
     GetHAL().stopVibrate();
     friday::context::ContextLink::instance().setTravelActive(false);
@@ -437,33 +418,15 @@ void AppFriday::handleInputs(uint32_t nowMs)
     }
 
     const auto keyEvent = _key_manager->update();
-
     if (keyEvent == input::KeyEvent::GoHome) {
-        if (_capsule_state == CapsuleState::Recording) {
-            finishCapsule(FridayCapsuleEndCanceled, nowMs);
-        }
         close();
         return;
     }
 
-    // A belongs exclusively to Flash Capsule in Friday. If B joins it, cancel
-    // the partial stream immediately and let the existing A+B hold gesture
-    // return to the launcher once KeyManager reaches its Home threshold.
+    // A has no standalone action. Preserve the A+B launcher gesture without
+    // triggering B's reaction or recalling Friday during the chord.
     if (GetHAL().btnB.wasPressed() && GetHAL().btnA.isPressed()) {
-        if (_capsule_state == CapsuleState::Recording) {
-            finishCapsule(FridayCapsuleEndCanceled, nowMs);
-        }
         return;
-    }
-
-    if (GetHAL().btnA.wasPressed() && GetHAL().btnB.isReleased()) {
-        beginCapsule(nowMs);
-    }
-    if (GetHAL().btnA.wasReleased() && _capsule_state == CapsuleState::Recording) {
-        const FridayCapsuleEndReason reason = nowMs - _capsule_started_ms < CapsuleMinimumMs
-            ? FridayCapsuleEndTooShort
-            : FridayCapsuleEndReleased;
-        finishCapsule(reason, nowMs);
     }
 
     if ((_presence_state == PresenceState::Host || _presence_state == PresenceState::Departing ||
@@ -474,191 +437,9 @@ void AppFriday::handleInputs(uint32_t nowMs)
         return;
     }
 
+    // React on the debounced B press; ignore KeyManager's release-click events
+    // so one push cannot replay the animation a second time.
     if (GetHAL().btnB.wasPressed() && GetHAL().btnA.isReleased()) {
         _face_model.react(friday::Reaction::ButtonB, nowMs, 0.84f, -0.78f);
     }
-
-    switch (keyEvent) {
-        case input::KeyEvent::GoPrevious:
-        case input::KeyEvent::GoNext:
-            // Physical button actions are handled on their debounced edges.
-            break;
-        case input::KeyEvent::GoHome:
-            break;
-        default:
-            break;
-    }
-}
-
-void AppFriday::beginCapsule(uint32_t nowMs)
-{
-    if (_capsule_state == CapsuleState::Recording || _capsule_state == CapsuleState::AwaitingSave) {
-        return;
-    }
-    auto& link = friday::capsule::CapsuleLink::instance();
-    if (!link.ready() || GetHAL().getAudioSampleRate() != 44100) {
-        failCapsule(nowMs);
-        return;
-    }
-
-    uint16_t session = static_cast<uint16_t>((nowMs ^ (nowMs >> 16U)) & 0xFFFFU);
-    if (session == 0 || session == _capsule_session) {
-        ++session;
-        if (session == 0) {
-            session = 1;
-        }
-    }
-    _capsule_session = session;
-    _capsule_sequence = 0;
-    _capsule_total_samples = 0;
-    _capsule_started_ms = nowMs;
-    _capsule_deadline_ms = nowMs + FRIDAY_CAPSULE_MAX_DURATION_MS;
-    _capsule_feedback_until_ms = 0;
-    friday_capsule_adpcm_reset(&_capsule_adpcm);
-    friday_capsule_resampler_reset(&_capsule_resampler);
-
-    const size_t length = friday_capsule_encode_start(_capsule_packet.data(), _capsule_session);
-    if (length == 0 || !link.sendPacket(_capsule_packet.data(), length)) {
-        failCapsule(nowMs);
-        return;
-    }
-    link.setStreamingActive(true);
-    _capsule_state = CapsuleState::Recording;
-    mclog::tagInfo(getAppInfo().name, "Flash Capsule recording started, session {}", _capsule_session);
-}
-
-void AppFriday::captureCapsuleAudio()
-{
-    auto& link = friday::capsule::CapsuleLink::instance();
-    if (!link.ready()) {
-        failCapsule(GetHAL().millis());
-        return;
-    }
-
-    GetHAL().audioRecord(_capsule_input, FRIDAY_CAPSULE_CAPTURE_CHUNK_MS, CapsuleMicGainDb);
-    if (_capsule_input.size() != 882) {
-        failCapsule(GetHAL().millis());
-        return;
-    }
-    friday_capsule_resample_44100_to_16000(_capsule_input.data(), _capsule_resampled.data(),
-                                           &_capsule_resampler);
-
-    for (size_t offset = 0; offset < _capsule_resampled.size(); offset += FRIDAY_CAPSULE_FRAME_SAMPLES) {
-        int16_t predictor = 0;
-        uint8_t stepIndex = 0;
-        friday_capsule_adpcm_encode(_capsule_resampled.data() + offset, _capsule_encoded.data(),
-                                    &_capsule_adpcm, &predictor, &stepIndex);
-        const size_t length = friday_capsule_encode_audio(
-            _capsule_packet.data(), _capsule_session, _capsule_sequence++, predictor, stepIndex,
-            _capsule_encoded.data());
-        if (length == 0 || !link.sendPacket(_capsule_packet.data(), length)) {
-            failCapsule(GetHAL().millis());
-            return;
-        }
-        _capsule_total_samples += FRIDAY_CAPSULE_FRAME_SAMPLES;
-    }
-}
-
-void AppFriday::finishCapsule(FridayCapsuleEndReason reason, uint32_t nowMs)
-{
-    if (_capsule_state != CapsuleState::Recording) {
-        return;
-    }
-    auto& link = friday::capsule::CapsuleLink::instance();
-    const size_t length = friday_capsule_encode_end(_capsule_packet.data(), _capsule_session,
-                                                    reason, _capsule_total_samples);
-    const bool queued = length != 0 && link.sendPacket(_capsule_packet.data(), length);
-    link.setStreamingActive(false);
-
-    if (!queued || reason == FridayCapsuleEndTransportError) {
-        failCapsule(nowMs);
-        return;
-    }
-    if (reason == FridayCapsuleEndTooShort || reason == FridayCapsuleEndCanceled) {
-        _capsule_state = CapsuleState::Idle;
-        mclog::tagInfo(getAppInfo().name, "Flash Capsule discarded, reason {}", static_cast<unsigned>(reason));
-        return;
-    }
-    _capsule_state = CapsuleState::AwaitingSave;
-    _capsule_deadline_ms = nowMs + CapsuleAckTimeoutMs;
-    mclog::tagInfo(getAppInfo().name, "Flash Capsule awaiting Mac save, session {}", _capsule_session);
-}
-
-void AppFriday::failCapsule(uint32_t nowMs)
-{
-    friday::capsule::CapsuleLink::instance().setStreamingActive(false);
-    _capsule_state = CapsuleState::Failed;
-    _capsule_feedback_until_ms = nowMs + 1600U;
-    mclog::tagWarn(getAppInfo().name, "Flash Capsule failed, session {}", _capsule_session);
-}
-
-void AppFriday::updateCapsule(uint32_t nowMs)
-{
-    auto& link = friday::capsule::CapsuleLink::instance();
-    const auto ack = link.ackSnapshot();
-    if (ack.generation != _last_capsule_ack_generation) {
-        _last_capsule_ack_generation = ack.generation;
-        if (ack.valid && ack.session == _capsule_session) {
-            if (ack.status == FridayCapsuleAckSaved && _capsule_state == CapsuleState::AwaitingSave) {
-                _capsule_state = CapsuleState::Saved;
-                _capsule_feedback_until_ms = nowMs + 1500U;
-                _face_model.react(friday::Reaction::Play, nowMs);
-            } else if (ack.status == FridayCapsuleAckDiscarded &&
-                       ack.detail == FridayCapsuleAckDetailTooShort) {
-                _capsule_state = CapsuleState::Idle;
-            } else if (_capsule_state == CapsuleState::Recording ||
-                       _capsule_state == CapsuleState::AwaitingSave) {
-                failCapsule(nowMs);
-            }
-        }
-    }
-
-    if (_capsule_state == CapsuleState::Recording) {
-        if (!link.ready()) {
-            failCapsule(nowMs);
-            return;
-        }
-        if (static_cast<int32_t>(nowMs - _capsule_deadline_ms) >= 0) {
-            finishCapsule(FridayCapsuleEndTimeLimit, nowMs);
-            return;
-        }
-        captureCapsuleAudio();
-    } else if (_capsule_state == CapsuleState::AwaitingSave &&
-               static_cast<int32_t>(nowMs - _capsule_deadline_ms) >= 0) {
-        failCapsule(nowMs);
-    } else if ((_capsule_state == CapsuleState::Saved || _capsule_state == CapsuleState::Failed) &&
-               static_cast<int32_t>(nowMs - _capsule_feedback_until_ms) >= 0) {
-        _capsule_state = CapsuleState::Idle;
-    }
-}
-
-void AppFriday::updateCapsuleVisual(uint32_t nowMs)
-{
-    if (!_view) {
-        return;
-    }
-    friday::view::CapsuleVisualState visual = friday::view::CapsuleVisualState::Hidden;
-    float progress = 0.0f;
-    switch (_capsule_state) {
-        case CapsuleState::Idle:
-            break;
-        case CapsuleState::Recording:
-            visual = friday::view::CapsuleVisualState::Recording;
-            progress = std::min(1.0f, static_cast<float>(nowMs - _capsule_started_ms) /
-                                           static_cast<float>(FRIDAY_CAPSULE_MAX_DURATION_MS));
-            break;
-        case CapsuleState::AwaitingSave:
-            visual = friday::view::CapsuleVisualState::AwaitingSave;
-            progress = static_cast<float>(nowMs % 800U) / 800.0f;
-            break;
-        case CapsuleState::Saved:
-            visual = friday::view::CapsuleVisualState::Saved;
-            progress = 1.0f;
-            break;
-        case CapsuleState::Failed:
-            visual = friday::view::CapsuleVisualState::Failed;
-            progress = 1.0f;
-            break;
-    }
-    _view->setCapsuleVisual(visual, progress);
 }

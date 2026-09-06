@@ -3,5 +3,5 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "V0.5-friday-codex.8")
+set(PROJECT_VER "V0.5-friday-codex.9")
 project(StopWatch-UserDemo)

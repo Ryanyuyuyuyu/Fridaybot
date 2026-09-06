@@ -72,8 +72,6 @@ public:
     // own Friday's face or presence state machine.
     bool sendFridayTransfer(const uint8_t* packet, size_t length);
     bool setFridayTravelActive(bool active);
-    bool sendFridayCapsule(const uint8_t* packet, size_t length);
-    bool setFridayCapsuleActive(bool active);
 
 private:
     Service();

@@ -1,5 +1,10 @@
 # Codex：选择 Mac 与 USB 优先
 
+当前 `.9` 候选位于 `codex/remove-voice-memo`，已移除 Friday 的语音备忘录，
+尚未刷写。Friday 的 A 键单独使用无操作；Codex 的 A/PTT、主机身份与 USB 控制保留。
+停用的 GATT 属性保留为占位，维持原有属性顺序和已配对主机的句柄兼容。
+以下 `.6`—`.8` 部署结果属于历史验证记录，不代表 `.9` 已通过真机验收。
+
 本次开发位于 `codex/single-host-usb-priority`，基于已推送的闪念胶囊提交
 `1e67fbd`。2026-09-05 已将 `V0.5-friday-codex.6` 写入核实后的 `ota_1`，
 独立读回与受保护区域校验通过；实体启动、USB 枚举及 USB/加密蓝牙身份识别已确认。
@@ -23,7 +28,7 @@
   一次新的 USB 插拔会重新应用 USB 优先。
 - 切换前向旧会话释放已按住的操作，丢弃旧队列和触摸动作；切换后需要松手再按。
 - 最多记住八个设备及首选设备，重启保留。蓝牙可保留备用连接用于发现/切换，
-  它们不会同时获得 Codex 控制权。Friday 的 BLE 服务和录音/旅行功能保持独立。
+  它们不会同时获得 Codex 控制权。Friday 的 BLE 在场状态与跨屏移动保持独立。
 
 ![当前设备与传输方式](images/codex-host-dashboard.png)
 ![设备列表](images/codex-host-devices.png)
@@ -51,7 +56,7 @@ USB 构建需要专用配置，见 [USB 传输和恢复说明](codex-usb-transpo
 普通 `sdkconfig.defaults` 中 USB 仍默认关闭，避免开发固件默默改变原来的烧录接口。
 
 - `./tests/run_host_tests.sh`：主机选择、离线别名迁移、BLE 会话复用、USB 描述符、
-  USB 关闭路径、现有 Friday 协议/录音编码及固件集成契约。
+  USB 关闭路径、Friday 在场/跨屏协议及固件集成契约。
 - `make -C companion/macos/host_identity test`：身份及额度数据、文件权限、模拟 app-server。
 - `tests/run_lvgl_host_picker_qa.sh`：真实 LVGL 的圆屏截图和菜单输入隔离。
 - ESP-IDF 5.5.4 / ESP32-S3 完整 USB 固件构建，输出在忽略目录 `build-usb/`。
@@ -73,7 +78,7 @@ USB 构建需要专用配置，见 [USB 传输和恢复说明](codex-usb-transpo
 蓝牙服务的 40 个属性与顺序保留，身份服务只追加在最后，不删除配对或 NVS。
 Friday、音频 HAL、Launcher、时钟及秒表等源码与 `.5` 保持一致。
 
-## 当前已刷 `.8` 与验证
+## `.8` 历史部署与验证
 
 - 调整 Codex USB 配置和用户要求的状态入口视觉，保留 Report 6 的 63 字节双向
   协议、Feature 7/8 的 128/256 字节载荷；SDK、Friday、其他应用和桌面软件未修改。
@@ -140,7 +145,7 @@ Friday、音频 HAL、Launcher、时钟及秒表等源码与 `.5` 保持一致�
 4. USB 接充电器：原蓝牙主机不变。拔掉有效 USB：回到 B/BLE，或 B 离线。
 5. 手动切回 A，保持 USB 在 B，确认 B 的心跳、休眠及唤醒不抢回；重新插线才优先 B。
 6. 重启固件、重启助手、反复插拔并刷新额度，确认首选记忆和状态归属正确。
-7. 回归 Friday 录音流式传输、保存确认及跨屏行为。
+7. 回归 Friday 在场状态、表情与跨屏行为；单独按住 A 无操作，B 召回及 A+B 返回正常。
 
 USB OTG 模式会占用原 USB Serial/JTAG 的内部 PHY，因此烧录前必须确认准确设备、
 硬件下载模式和回退备份。只写核实后的目标 OTA App 分区；不要使用通用整片 flash 命令。

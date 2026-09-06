@@ -5,10 +5,10 @@
 `V0.5-friday-codex.6` 新增单一 Mac 控制、设备选择、USB 优先与同机蓝牙回退。
 使用规则、圆屏截图和真机验收见 [设备切换说明](docs/codex-host-switching.md)。
 USB 需要专用构建配置，并在每台 Mac 运行
-[身份与额度助手](companion/macos/host_identity/README.md)。`.7` 已完成指定 OTA 槽写入、
-独立读回、保护区校验和启动，但原生 USB 初始化仍超时。当前 `.8` 候选将主机写入
-改经 EP0 交付，完整构建、主机检查及实际固件描述符检查通过，尚未刷写；原生 USB
-控制与双 Mac 功能验收仍待完成。
+[身份与额度助手](companion/macos/host_identity/README.md)。`.8` 的部署记录已确认
+独立读回、启动和原生 USB RPC 响应；实体按键与双 Mac 行为仍待验收。当前 `.9`
+候选移除 Friday 语音备忘录，尚未刷写；保留现有 Codex 控制，以及停用的 GATT
+属性占位和原有顺序，维持已配对主机的句柄兼容。
 
 这个分支把 Friday 与兼容 Codex Micro 的控制界面做成 M5Stack StopWatch
 launcher 中两个相邻、互相独立的 App。冷启动先进入 launcher，可以直接选择
@@ -45,24 +45,16 @@ A+B 完全由 StopWatch 本地处理：它不会向 ChatGPT 发送“返回”�
 上的 ChatGPT。BLE 服务属于整个设备进程，因此离开 Codex App 后仍会在后台保持；
 此时可以停留在 launcher 或打开其他原厂 App。
 
-## Friday 闪念胶囊
+## Friday 交互
 
-闪念胶囊仍是实验原型，录音时长、清晰度与转写准确率正在真机验证；编译和启动通过
-不代表音质验收通过。
+- 轻点、长按、拖动和滑动屏幕，以及倾斜或拿起设备，会触发不同的表情与动作；
+- 实体 A 键单独按下或按住均无操作；
+- 实体 B 键播放追逐和跳跃动画；Friday 在 Mac 上时，B 用于召回；
+- 连接 Friday Companion 后，将 Friday 拖到朝向 Mac 的屏幕边缘，即可让它前往桌面；
+- 同时按住 A+B 返回原厂 launcher。
 
-在 **Friday App** 里，实体 A 键不再播放旧的短按动画，而是专用于“闪念胶囊”：
-
-- Mac 上必须运行 Friday Companion，并保持已绑定、加密的 BLE 连接；
-- 按住 A 后立即使用 StopWatch 自带麦克风录音，并以 20 ms 小块边录边传；
-- 松开 A 即结束，最长 60 秒；不足 0.8 秒按误触丢弃，不进入历史；
-- 录音时 Friday 外圈显示绿色进度，Mac 同步进行流式转写；只有最终文字与分类已原子
-  保存、临时原音已删除，才显示完整绿色成功环和表情；
-- Mac 菜单栏的“今日闪念胶囊”把待办与备忘放在同一列表中。转写失败或可信度不足时
-  显示待确认并临时保留原音，最长 24 小时后自动删除；断线、丢帧或落盘失败显示橙红色。
-
-Friday 的 B 键动画与召回功能保持不变；Friday 在 Mac 上时，B 用于召回，A 仍用于录制
-闪念胶囊。A+B 仍取消当前录音并返回 launcher。闪念胶囊不会写入 StopWatch 离线存储，
-Mac 未连接时会直接显示失败反馈。
+Friday Companion 提供粗粒度在场状态与跨屏移动功能，详情见
+[Mac 伴侣说明](companion/macos/README.md)。
 
 ## 蓝牙重新配对
 
@@ -118,9 +110,7 @@ idf.py build
 - 在 Codex App 中，实体 A 键会在按下和松开时直接上报 `ACT10`。程序会优先判断 A+B Home 组合键，
   因此返回 launcher 时不会遗留按住状态。
 - 两个 UI 共用唯一的 ESP-IDF Bluedroid 服务；同一份 GATT 数据库同时提供
-  Codex HID/额度与 Friday context/travel/闪念胶囊通道，避免启动两套互斥的 BLE Host。
-- 闪念胶囊使用独立 BLE 队列；Codex 的命令与松开事件始终先处理，且自动测试锁定
-  已验证的 Codex UI/控制源码哈希，防止 Friday 功能误改 Codex。
+  Codex HID/额度与 Friday context/travel 通道，避免启动两套互斥的 BLE Host。
 - LVGL 回调只把触摸意图加入队列，由 App 主循环发送 BLE，并为每次按下配对松开。
 - A+B 沿用原厂 `KeyManager` 的 Home 手势，通过本地 App `close()` 返回 launcher。
 

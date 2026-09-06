@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "apps/app_friday/capsule/capsule_protocol.h"
 #include "esp_gatt_defs.h"
 
 namespace codex_micro::detail {
@@ -40,8 +39,6 @@ inline uint8_t kHostIdentityServiceUuid[ESP_UUID_LEN_128] = {
 //   46524944-4159-0001-8000-00805F9B34FB (Friday service)
 //   46524944-4159-0002-8000-00805F9B34FB (context characteristic)
 //   46524944-4159-0003-8000-00805F9B34FB (presence transfer characteristic)
-//   46524944-4159-0004-8000-00805F9B34FB (Flash Capsule audio notifications)
-//   46524944-4159-0005-8000-00805F9B34FB (Flash Capsule host acknowledgement)
 inline uint8_t kFridayServiceUuid[ESP_UUID_LEN_128] = {
     0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x01, 0x00, 0x59, 0x41, 0x44, 0x49, 0x52, 0x46,
 };
@@ -51,10 +48,12 @@ inline uint8_t kFridayContextUuid[ESP_UUID_LEN_128] = {
 inline uint8_t kFridayTransferUuid[ESP_UUID_LEN_128] = {
     0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x03, 0x00, 0x59, 0x41, 0x44, 0x49, 0x52, 0x46,
 };
-inline uint8_t kFridayCapsuleDataUuid[ESP_UUID_LEN_128] = {
+// Retired UUIDs occupy inert slots to keep the following Codex host-identity
+// service at its released handles. No read, write, or notification capability.
+inline uint8_t kFridayReservedUuid4[ESP_UUID_LEN_128] = {
     0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x04, 0x00, 0x59, 0x41, 0x44, 0x49, 0x52, 0x46,
 };
-inline uint8_t kFridayCapsuleAckUuid[ESP_UUID_LEN_128] = {
+inline uint8_t kFridayReservedUuid5[ESP_UUID_LEN_128] = {
     0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x05, 0x00, 0x59, 0x41, 0x44, 0x49, 0x52, 0x46,
 };
 
@@ -127,11 +126,11 @@ enum FridayIndex : uint8_t {
     kFridayTransferDeclaration,
     kFridayTransferValue,
     kFridayTransferCccd,
-    kFridayCapsuleDataDeclaration,
-    kFridayCapsuleDataValue,
-    kFridayCapsuleDataCccd,
-    kFridayCapsuleAckDeclaration,
-    kFridayCapsuleAckValue,
+    kFridayReservedDeclaration4,
+    kFridayReservedValue4,
+    kFridayReservedDescriptor4,
+    kFridayReservedDeclaration5,
+    kFridayReservedValue5,
     kFridayCount,
 };
 
@@ -161,6 +160,7 @@ inline uint16_t kBatteryServiceUuid    = ESP_GATT_UUID_BATTERY_SERVICE_SVC;
 inline uint16_t kBatteryLevelUuid      = ESP_GATT_UUID_BATTERY_LEVEL;
 
 inline uint8_t kPropertyRead                = ESP_GATT_CHAR_PROP_BIT_READ;
+inline uint8_t kPropertyDisabled            = 0;
 inline uint8_t kPropertyWriteNoResponse     = ESP_GATT_CHAR_PROP_BIT_WRITE_NR;
 inline uint8_t kPropertyReadWriteNoResponse = ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE_NR;
 inline uint8_t kPropertyReadNotify          = ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY;
@@ -196,9 +196,8 @@ inline uint8_t kHostIdentityInitialValue[128] = {};
 inline uint8_t kFridayContextInitialValue[4]      = {1, 0, 0, 0};
 inline uint8_t kFridayTransferInitialValue[10]    = {};
 inline uint8_t kFridayTransferCccdValue[2]        = {0x00, 0x00};
-inline uint8_t kFridayCapsuleDataInitialValue[FRIDAY_CAPSULE_MAX_PACKET_SIZE] = {};
-inline uint8_t kFridayCapsuleDataCccdValue[2]     = {0x00, 0x00};
-inline uint8_t kFridayCapsuleAckInitialValue[FRIDAY_CAPSULE_ACK_PACKET_SIZE] = {};
+inline uint8_t kFridayReservedValue = 0;
+inline uint8_t kFridayReservedDescriptor[2] = {0x00, 0x00};
 
 #define CODEX_ATTR16(uuid_ptr, permissions, max_len, current_len, value_ptr)                          \
     {                                                                                                 \
@@ -297,16 +296,16 @@ inline const esp_gatts_attr_db_t kFridayDb[kFridayCount] = {
                   sizeof(kFridayTransferInitialValue), kFridayTransferInitialValue),
     CODEX_ATTR16(&kCccdUuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, sizeof(kFridayTransferCccdValue),
                  sizeof(kFridayTransferCccdValue), kFridayTransferCccdValue),
-    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyReadNotify),
-                 sizeof(kPropertyReadNotify), &kPropertyReadNotify),
-    CODEX_ATTR128(kFridayCapsuleDataUuid, ESP_GATT_PERM_READ_ENCRYPTED, sizeof(kFridayCapsuleDataInitialValue),
-                  0, kFridayCapsuleDataInitialValue),
-    CODEX_ATTR16(&kCccdUuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, sizeof(kFridayCapsuleDataCccdValue),
-                 sizeof(kFridayCapsuleDataCccdValue), kFridayCapsuleDataCccdValue),
-    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyWrite),
-                 sizeof(kPropertyWrite), &kPropertyWrite),
-    CODEX_ATTR128(kFridayCapsuleAckUuid, ESP_GATT_PERM_WRITE_ENCRYPTED, sizeof(kFridayCapsuleAckInitialValue),
-                  0, kFridayCapsuleAckInitialValue),
+    // Do not compact these five retired attributes: doing so shifts the
+    // paired Mac's cached Codex host-identity handles. All operations are denied.
+    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyDisabled),
+                 sizeof(kPropertyDisabled), &kPropertyDisabled),
+    CODEX_ATTR128(kFridayReservedUuid4, 0, sizeof(kFridayReservedValue), 0, &kFridayReservedValue),
+    CODEX_ATTR16(&kCccdUuid, 0, sizeof(kFridayReservedDescriptor),
+                 sizeof(kFridayReservedDescriptor), kFridayReservedDescriptor),
+    CODEX_ATTR16(&kCharacteristicDeclarationUuid, ESP_GATT_PERM_READ, sizeof(kPropertyDisabled),
+                 sizeof(kPropertyDisabled), &kPropertyDisabled),
+    CODEX_ATTR128(kFridayReservedUuid5, 0, sizeof(kFridayReservedValue), 0, &kFridayReservedValue),
 };
 
 inline const esp_gatts_attr_db_t kHostIdentityDb[kHostIdentityCount] = {

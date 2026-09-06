@@ -75,7 +75,7 @@ build). A timeout cancels its request token; any failed attempted write
 disconnects USB before a later message can reuse a partial stream or leave an
 uncertain single-report key press held. A call rejected before attempting a
 write because the cycle budget is already empty does not disconnect USB.
-This bounds USB congestion without blocking Friday's BLE audio queue for a
+This bounds USB congestion without blocking Friday's BLE context and travel for a
 full sequence of per-report timeouts, and prevents an old host's command from
 following a newly enumerated host.
 

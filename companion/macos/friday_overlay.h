@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 #import <AppKit/AppKit.h>
-#import "friday_capsule_store.h"
 
 typedef NS_ENUM(uint8_t, FridayTravelDirection) {
     FridayTravelDirectionLeft = 1,
@@ -22,5 +21,4 @@ typedef NS_ENUM(uint8_t, FridayTravelDirection) {
                     sequence:(uint8_t)sequence;
 - (void)returnToDevice;
 - (void)dismissImmediately;
-- (void)setCapsuleState:(FridayCapsuleFeedbackState)state progress:(CGFloat)progress;
 @end

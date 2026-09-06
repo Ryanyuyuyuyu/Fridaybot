@@ -1,10 +1,9 @@
 # Friday Companion for macOS
 
 This local helper turns coarse Mac activity into optional BLE context for
-Friday, provides the StopWatch-to-Mac travel portal, and receives intentional
-Flash Capsule recordings. Friday's local personality remains functional when
-the helper is stopped or the BLE link is unavailable; recording a Flash
-Capsule specifically requires the connected Mac.
+Friday and provides the StopWatch-to-Mac travel portal. Friday's local
+personality remains functional when the helper is stopped or the BLE link is
+unavailable.
 
 For presence detection, the helper reads only:
 
@@ -12,11 +11,9 @@ For presence detection, the helper reads only:
 - whether the current macOS session is locked.
 
 It does not read keystrokes, window titles, URLs, documents, screenshots,
-camera frames, or the Mac microphone. Only while you deliberately hold the
-StopWatch A button does it receive audio from the **StopWatch's built-in
-microphone**. While Friday is visible on the Mac, the overlay reads the current
-pointer position so its eyes can look toward it. The position is neither stored
-nor sent to the StopWatch.
+camera frames, or microphone audio. While Friday is visible on the Mac, the
+overlay reads the current pointer position so its eyes can look toward it.
+The position is neither stored nor sent to the StopWatch.
 
 ## Build and run
 
@@ -29,7 +26,7 @@ open -n build/FridayCompanion.app --args --monitor-side left
 `--monitor-side` describes the monitor's position from Friday's point of view,
 not Friday's position from yours. Use `left`, `centre`, or `right`.
 
-macOS may ask for Bluetooth and Speech Recognition permission the first time.
+macOS may ask for Bluetooth permission the first time.
 The helper automatically reconnects to the paired peripheral that publishes
 Friday's service (the combined firmware advertises as `Codex Micro`). Stop it
 from Activity Monitor by quitting `friday-companion`; Friday will return to
@@ -38,45 +35,19 @@ privacy permissions with the app bundle.
 
 Rebuilding this ad-hoc-signed development app can invalidate an earlier
 Bluetooth approval. If the log reports permission denied, allow Friday
-Companion in System Settings > Privacy & Security > Bluetooth. Confirm
-`Capsule channel ready` before attempting a recording.
+Companion in System Settings > Privacy & Security > Bluetooth.
 
-## Flash Capsules
+## Existing data from older builds
 
-1. Keep this companion running and the StopWatch connected over bonded,
-   encrypted BLE.
-2. In the Friday App, hold physical A and speak. A green ring grows around
-   Friday while 20 ms audio chunks are encoded and streamed to the Mac.
-3. Release A to finish. Recording stops automatically at 60 seconds; captures
-   shorter than 0.8 seconds are treated as accidental and deleted.
-4. The Mac feeds each decoded frame into Speech while keeping a temporary WAV
-   as recovery insurance. Only after the final transcript and classification
-   are atomically stored and that WAV is deleted does it acknowledge success,
-   shown as a full green ring and an expression.
-5. Open the waveform item in the macOS menu bar to view “今日闪念胶囊” and
-   complete items classified as todos. Todos and memos stay in one list.
-   Orange/red means transcription needs review or the capsule was not safely
-   stored; its temporary audio remains playable for at most 24 hours.
-
-Files are local under:
+The discontinued Flash Capsule prototype stored recordings and text locally
+under:
 
 ```text
 ~/Library/Application Support/Friday/Flash Capsules/YYYY-MM-DD/
 ```
 
-Each day has an atomic `index.json` with transcript, classification, completion
-state, timestamp, and duration. Audio is written to a temporary file as it
-arrives; successful transcription deletes it immediately. A disconnect or
-missing BLE frame deletes the partial capture rather than showing a false
-success. Failed and low-confidence transcriptions retain recovery audio for at
-most 24 hours, after which it is automatically deleted.
-
-Transcription starts while audio is still arriving, uses Chinese dictation
-context, and finalizes after release. macOS may use Apple's speech service
-according to the system's language, network, and privacy settings. A simple,
-conservative action-marker pass labels clear requests as `待办` and defaults
-other confident speech to `备忘`. Missing or low-confidence text stays
-`待确认` instead of producing a false green success.
+This helper no longer opens or modifies that folder. Existing files remain
+available on disk, and the former automatic audio cleanup no longer runs.
 
 ## Cross-device travel prototype
 
@@ -88,8 +59,7 @@ other confident speech to `备忘`. Missing or low-confidence text stays
    sneaks onto the desktop. Its capsule eyes animate locally at 60 FPS.
 4. Click Friday for a small reaction. Drag it around the desktop or through the
    connected Mac displays; drag it back to its original outer portal edge to
-   send it home. A single StopWatch B button press also recalls it; A remains
-   dedicated to Flash Capsule recording.
+   send it home. A single StopWatch B button press also recalls it.
 
 The companion runs the full AppKit event loop while remaining an accessory app
 without a Dock icon. The transparent non-activating panel explicitly owns its

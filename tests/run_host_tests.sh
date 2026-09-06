@@ -51,10 +51,6 @@ compile_and_run context_protocol_test \
 compile_and_run presence_protocol_test \
     "$test_repo_root/tests/presence_protocol_test.cpp"
 
-compile_and_run capsule_codec_test \
-    "$test_repo_root/tests/capsule_codec_test.cpp" \
-    "$test_repo_root/main/apps/app_friday/capsule/capsule_codec.cpp"
-
 compile_and_run context_link_bridge_test \
     "$test_repo_root/tests/context_link_bridge_test.cpp" \
     "$test_repo_root/main/apps/app_friday/context_link.cpp"

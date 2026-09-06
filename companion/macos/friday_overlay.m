@@ -44,8 +44,6 @@ static NSPoint InterpolatePoint(NSPoint from, NSPoint to, CGFloat progress)
 @property(nonatomic) uint16_t seed;
 @property(nonatomic) BOOL beingDragged;
 @property(nonatomic) CGFloat dragEnergy;
-@property(nonatomic) FridayCapsuleFeedbackState capsuleState;
-@property(nonatomic) CGFloat capsuleProgress;
 @property(nonatomic, copy) void (^onPointerDown)(NSPoint screenPoint);
 @property(nonatomic, copy) void (^onPointerDragged)(NSPoint screenPoint);
 @property(nonatomic, copy) void (^onPointerUp)(NSPoint screenPoint, BOOL dragged);
@@ -145,35 +143,6 @@ static NSPoint InterpolatePoint(NSPoint from, NSPoint to, CGFloat progress)
     orb.lineWidth = 1.0;
     [orb stroke];
 
-    if (self.capsuleState != FridayCapsuleFeedbackIdle) {
-        const BOOL failed = self.capsuleState == FridayCapsuleFeedbackFailed;
-        NSColor *color = failed ? [NSColor colorWithSRGBRed:0.94 green:0.42 blue:0.31 alpha:1.0]
-                                : [NSColor colorWithSRGBRed:0.26 green:0.82 blue:0.48 alpha:1.0];
-        NSBezierPath *track = [NSBezierPath bezierPathWithOvalInRect:NSInsetRect(self.bounds, 3.5, 3.5)];
-        [[color colorWithAlphaComponent:0.18] setStroke];
-        track.lineWidth = 6.0;
-        [track stroke];
-
-        CGFloat progress = Clamp(self.capsuleProgress, 0.0, 1.0);
-        CGFloat alpha = 1.0;
-        if (self.capsuleState == FridayCapsuleFeedbackAwaitingSave) {
-            progress = 1.0;
-            alpha = 0.52 + 0.34 * (0.5 + 0.5 * sin(self.animationTime * 2.0 * M_PI / 0.75));
-        } else if (self.capsuleState == FridayCapsuleFeedbackSaved || failed) {
-            progress = 1.0;
-        }
-        NSBezierPath *ring = [NSBezierPath bezierPath];
-        [ring appendBezierPathWithArcWithCenter:NSMakePoint(NSMidX(self.bounds), NSMidY(self.bounds))
-                                         radius:NSWidth(self.bounds) * 0.5 - 6.5
-                                     startAngle:-90.0
-                                       endAngle:-90.0 + progress * 360.0
-                                      clockwise:NO];
-        [[color colorWithAlphaComponent:alpha] setStroke];
-        ring.lineWidth = self.capsuleState == FridayCapsuleFeedbackSaved ? 8.0 : 6.0;
-        ring.lineCapStyle = NSLineCapStyleRound;
-        [ring stroke];
-    }
-
     NSPoint mouse = NSEvent.mouseLocation;
     NSPoint centreOnScreen = NSMakePoint(NSMidX(self.window.frame), NSMidY(self.window.frame));
     CGFloat gazeX = Clamp((mouse.x - centreOnScreen.x) / 38.0, -1.0, 1.0);
@@ -260,7 +229,6 @@ static NSPoint InterpolatePoint(NSPoint from, NSPoint to, CGFloat progress)
     NSPoint _lastPointerPoint;
     NSTimeInterval _returnDuration;
     BOOL _returnStartedPublished;
-    NSUInteger _capsuleFeedbackGeneration;
 }
 
 - (instancetype)init
@@ -504,26 +472,6 @@ static NSPoint InterpolatePoint(NSPoint from, NSPoint to, CGFloat progress)
     _phase = FridayOverlayPhaseHidden;
     _view.beingDragged = NO;
     [_panel orderOut:nil];
-}
-
-- (void)setCapsuleState:(FridayCapsuleFeedbackState)state progress:(CGFloat)progress
-{
-    _view.capsuleState = state;
-    _view.capsuleProgress = Clamp(progress, 0.0, 1.0);
-    [_view setNeedsDisplay:YES];
-    const NSUInteger generation = ++_capsuleFeedbackGeneration;
-    if (state == FridayCapsuleFeedbackSaved) {
-        [_view playClickReaction];
-    }
-    if (state == FridayCapsuleFeedbackSaved || state == FridayCapsuleFeedbackFailed) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1600 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            if (generation == self->_capsuleFeedbackGeneration) {
-                self->_view.capsuleState = FridayCapsuleFeedbackIdle;
-                self->_view.capsuleProgress = 0.0;
-                [self->_view setNeedsDisplay:YES];
-            }
-        });
-    }
 }
 
 - (void)finishReturn

@@ -55,10 +55,10 @@ def run(root: Path) -> None:
         ], [primary, declaration, "kQuotaWriteUuid"]),
         ("FridayIndex", "kFriday", "kFridayDb", "kFridayCount", [
             "kFridayService", "kFridayContextDeclaration", "kFridayContextValue", "kFridayTransferDeclaration",
-            "kFridayTransferValue", "kFridayTransferCccd", "kFridayCapsuleDataDeclaration", "kFridayCapsuleDataValue",
-            "kFridayCapsuleDataCccd", "kFridayCapsuleAckDeclaration", "kFridayCapsuleAckValue",
+            "kFridayTransferValue", "kFridayTransferCccd", "kFridayReservedDeclaration4", "kFridayReservedValue4",
+            "kFridayReservedDescriptor4", "kFridayReservedDeclaration5", "kFridayReservedValue5",
         ], [primary, declaration, "kFridayContextUuid", declaration, "kFridayTransferUuid", "kCccdUuid",
-            declaration, "kFridayCapsuleDataUuid", "kCccdUuid", declaration, "kFridayCapsuleAckUuid"]),
+            declaration, "kFridayReservedUuid4", "kCccdUuid", declaration, "kFridayReservedUuid5"]),
     ]
     table_enum = function_body(service, "enum class TableId : uint8_t")
     table_ids = [(name, int(value)) for name, value in re.findall(r"(k\w+)\s*=\s*(\d+)", table_enum)]
@@ -73,6 +73,24 @@ def run(root: Path) -> None:
         require(re.search(rf"case TableId::{table_id}:\s*table = detail::{db};\s*count = detail::{count};", create) is not None,
                 f"{table_id} registration must create its original database/count")
     require([len(entry[4]) for entry in baseline] == [5, 16, 5, 3, 11], "frozen baseline has changed")
+
+    # Retired Friday slots remain solely to preserve the next service's handles.
+    # Cached clients must not be able to subscribe, write acknowledgements, or
+    # start an audio stream. The runtime feature and its storage are gone.
+    friday_db = function_body(gatt, "inline const esp_gatts_attr_db_t kFridayDb")
+    entries = re.findall(r"CODEX_ATTR(?:16|128)\s*\(((?:[^()]|\([^()]*\))*)\)", friday_db)
+    require(len(entries) == 11, "Friday must retain exactly eleven allocated handles")
+    require(re.search(r"kPropertyDisabled\s*=\s*0\s*;", gatt) is not None,
+            "retired characteristics must expose no read/write/notify properties")
+    for index in (6, 9):
+        require("&kPropertyDisabled" in entries[index], "retired declarations must advertise zero properties")
+    for index in (7, 8, 10):
+        require(entries[index].split(",")[1].strip() == "0", "retired values and CCCD must deny all access")
+    require("kFridayReserved" not in service, "retired handles must have no runtime routing or subscriptions")
+    arrays = byte_arrays(gatt)
+    require(bytes(arrays["kFridayReservedUuid4"]) == bytes.fromhex("fb349b5f800000800400594144495246") and
+            bytes(arrays["kFridayReservedUuid5"]) == bytes.fromhex("fb349b5f800000800500594144495246"),
+            "retired UUIDs must stay reserved rather than being repurposed for another operation")
 
     require(enum_names(gatt, "HostIdentityIndex") == ["kHostIdentityService", "kHostIdentityDeclaration", "kHostIdentityValue", "kHostIdentityCount"],
             "identity service must contain exactly its service/declaration/value")
@@ -109,7 +127,7 @@ def run(root: Path) -> None:
             "Mac helper must keep quota discovery on the original service")
     require("scanForPeripheralsWithServices:@[ServiceUUID()]" in helper,
             "Mac helper must retain advertised quota-service discovery")
-    print("gatt_handle_compatibility_test: PASS (5 original services / 40 attributes preserved; identity appended)")
+    print("gatt_handle_compatibility_test: PASS (40 handles preserved; retired Friday slots disabled; identity unchanged)")
 
 
 if __name__ == "__main__":

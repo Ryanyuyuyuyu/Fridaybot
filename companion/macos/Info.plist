@@ -15,16 +15,14 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.6</string>
+    <string>0.7</string>
     <key>CFBundleVersion</key>
-    <string>6</string>
+    <string>7</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Friday Companion 使用低功耗蓝牙同步状态、跨设备穿越指令与由 StopWatch 麦克风采集的闪念胶囊音频。</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Friday Companion 将闪念胶囊的本地音频转写为文字，方便整理当天的待办与备忘。</string>
+    <string>Friday Companion 使用低功耗蓝牙同步粗粒度办公状态与 Friday 跨设备穿越指令。</string>
 </dict>
 </plist>

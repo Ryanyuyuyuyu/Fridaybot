@@ -1,30 +1,23 @@
 APP := build/FridayCompanion.app
 EXECUTABLE := $(APP)/Contents/MacOS/friday-companion
 PLIST := $(APP)/Contents/Info.plist
-OBJECTS := build/obj/friday_companion.o build/obj/friday_overlay.o build/obj/friday_capsule_store.o \
-	build/obj/friday_capsule_inbox.o build/obj/capsule_codec.o
+OBJECTS := build/obj/friday_companion.o build/obj/friday_overlay.o
 
 .PHONY: all clean run sign
 
 all: sign
 
-CAPSULE_CODEC := ../../main/apps/app_friday/capsule/capsule_codec.cpp
-
 $(EXECUTABLE): $(OBJECTS)
 	mkdir -p "$(APP)/Contents/MacOS"
-	xcrun clang++ -mmacosx-version-min=13.0 \
+	xcrun clang -mmacosx-version-min=13.0 \
 		-framework Foundation -framework AppKit -framework CoreBluetooth \
-		-framework ApplicationServices -framework AVFoundation -framework Speech \
+		-framework ApplicationServices \
 		$(OBJECTS) -o "$(EXECUTABLE)"
 
-build/obj/%.o: %.m
+build/obj/%.o: %.m friday_overlay.h
 	mkdir -p build/obj build/module-cache
 	xcrun clang -c -fobjc-arc -fmodules -fmodules-cache-path=build/module-cache -O2 -Wall -Wextra \
 		-mmacosx-version-min=13.0 $< -o $@
-
-build/obj/capsule_codec.o: $(CAPSULE_CODEC)
-	mkdir -p build/obj
-	xcrun clang++ -c -std=c++17 -O2 -Wall -Wextra -mmacosx-version-min=13.0 $< -o $@
 
 $(PLIST): Info.plist
 	mkdir -p "$(APP)/Contents"
