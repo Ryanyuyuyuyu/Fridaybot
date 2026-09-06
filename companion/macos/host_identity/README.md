@@ -87,10 +87,64 @@ reported as zero. Reads start after a compatible device accepts identity, then
 repeat at most once a minute. Use this helper as the quota writer when testing
 USB-only operation; older BLE-only quota helpers do not prioritize USB.
 
-For automatic startup after manual installation, optionally add the app in
-System Settings > General > Login Items. This repository does not install a LaunchAgent or change
-Login Items automatically. Rebuilding an ad-hoc signed app may require renewing
-its Bluetooth permission.
+Rebuilding an ad-hoc signed app may require renewing its Bluetooth permission.
+
+## Optional startup at login
+
+The helper must run after every Mac login for USB host selection to work. Use
+the optional startup script after installing the app in `~/Applications` and
+granting Bluetooth permission through a manual launch. From this directory:
+
+```sh
+# Review the proposed configuration without installing or launching anything.
+/bin/sh scripts/manage-startup.sh --print
+
+# Stop only the manually running codex-host-identity process in Activity Monitor,
+# then install and start the dedicated job in this user's desktop session.
+/bin/sh scripts/manage-startup.sh --install
+
+# Inspect this job and its logs after installation.
+launchctl print "gui/$(id -u)/com.friday.codex-host-identity"
+tail -n 20 "$HOME/Library/Logs/CodexHostIdentity/stdout.log"
+tail -n 20 "$HOME/Library/Logs/CodexHostIdentity/stderr.log"
+
+# Stop the managed helper and remove automatic startup.
+/bin/sh scripts/manage-startup.sh --uninstall
+```
+
+The script manages only
+`~/Library/LaunchAgents/com.friday.codex-host-identity.plist`. It starts the exact
+installed helper executable at login, restarts it after an abnormal exit, and
+throttles retries to 30 seconds. Logs go to `~/Library/Logs/CodexHostIdentity/`.
+It refuses installation while that executable is running manually, so its
+singleton lock cannot cause repeated duplicate-start attempts. Installation is
+idempotent when the same job is already loaded. If startup settings differ,
+uninstall them before installing the new configuration.
+
+Uninstall keeps the app, UUID, alias, and logs. Use it before replacing a managed
+app or deliberately stopping it; otherwise launchd can restart a terminated
+process. After replacing the app, run `--install` again. The script does not
+update apps, set labels, change firmware, or manage Friday Companion, native
+Codex, or other login items. `make` and `make test` do not install this job. If you
+already added the app through System Settings > Login Items, use that existing
+startup method instead of adding a second one.
+
+## USB is attached but controls do nothing
+
+USB enumeration and successful native Codex RPC responses do not establish the
+control route by themselves. On each USB session the firmware needs both the
+native Codex RPC handshake and the helper's Feature 7 identity announcement. It
+does not infer the attached Mac from the last saved host preference. Without a
+running helper, RPC initialization can succeed while button commands have no
+USB destination.
+
+Check that `codex-host-identity` is running from the installed app and inspect
+its logs. A manually launched helper does not automatically return after reboot;
+use the optional startup setup above. If the native handshake already succeeded
+in this USB session, starting the helper can complete routing with its next
+identity announcement, without restarting native Codex or reflashing firmware.
+Verify an actual device press after both are ready. An identity-delivered log
+alone does not prove that native Codex received a control event.
 
 ## Choose a short display name
 
