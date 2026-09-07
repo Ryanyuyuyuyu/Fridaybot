@@ -1,9 +1,13 @@
 # Codex：选择 Mac 与 USB 优先
 
-当前 `.9` 候选位于 `codex/remove-voice-memo`，已移除 Friday 的语音备忘录，
-尚未刷写。Friday 的 A 键单独使用无操作；Codex 的 A/PTT、主机身份与 USB 控制保留。
-停用的 GATT 属性保留为占位，维持原有属性顺序和已配对主机的句柄兼容。
-以下 `.6`—`.8` 部署结果属于历史验证记录，不代表 `.9` 已通过真机验收。
+`.9` 位于 `codex/remove-voice-memo`，已移除 Friday 的语音备忘录。
+2026-09-07 已将 `V0.5-friday-codex.9` 写入 `ota_1`：4,361,120 字节应用镜像
+完整独立读回与候选逐字节一致，11,591,680 字节非目标保护区保持原始摘要，
+OTA 序列最终为 `[19,20]`。单独 watchdog 重启后，同一 Codex Micro USB 设备恢复，
+被动监听收到两条有效 RPC 响应且未向设备写报告。Friday 的 A 键单独使用无操作；
+Codex 的 A/PTT、主机身份与 USB 控制保留。停用的 GATT 属性继续作为占位，维持
+原有属性顺序和已配对主机的句柄兼容。实体 Friday/Codex 按键与双 Mac 行为仍需
+用户单独验收；USB 返回和 RPC 成功不能代替这些物理检查。
 
 本次开发位于 `codex/single-host-usb-priority`，基于已推送的闪念胶囊提交
 `1e67fbd`。2026-09-05 已将 `V0.5-friday-codex.6` 写入核实后的 `ota_1`，

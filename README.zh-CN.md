@@ -6,9 +6,14 @@
 使用规则、圆屏截图和真机验收见 [设备切换说明](docs/codex-host-switching.md)。
 USB 需要专用构建配置，并在每台 Mac 运行
 [身份与额度助手](companion/macos/host_identity/README.md)。`.8` 的部署记录已确认
-独立读回、启动和原生 USB RPC 响应；实体按键与双 Mac 行为仍待验收。当前 `.9`
-候选移除 Friday 语音备忘录，尚未刷写；保留现有 Codex 控制，以及停用的 GATT
-属性占位和原有顺序，维持已配对主机的句柄兼容。
+独立读回、启动和原生 USB RPC 响应。`V0.5-friday-codex.9` 已移除 Friday
+语音备忘录，并于 2026-09-07 写入 `ota_1`；独立完整读回和非目标保护区校验通过，
+设备随后以同一 Codex Micro 原生 USB 身份恢复并返回有效 RPC。Friday/Codex
+实体按键回归与双 Mac 行为仍属于单独的真机验收项。现有 Codex 控制、停用的
+GATT 属性占位及原有顺序均保留，以维持已配对主机的句柄兼容。
+
+所有维护分支的用途、继承关系、验证状态和推荐用法见
+[分支与版本说明](docs/branches-and-releases.md)。
 
 这个分支把 Friday 与兼容 Codex Micro 的控制界面做成 M5Stack StopWatch
 launcher 中两个相邻、互相独立的 App。冷启动先进入 launcher，可以直接选择

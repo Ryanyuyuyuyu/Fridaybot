@@ -6,10 +6,16 @@ a device picker, optional USB priority, and same-Mac Bluetooth fallback. See
 [USB build configuration](docs/codex-usb-transport.md), and the
 [Mac identity/usage helper](companion/macos/host_identity/README.md).
 The `.8` deployment record confirms independent readback, boot, and native USB
-RPC responses after moving host writes to EP0. Physical controls and two-Mac
-behavior still require validation. The current `.9` candidate removes Friday's
-voice memo functionality and is not yet flashed. It retains the existing Codex
-controls and inactive GATT placeholders to preserve paired-host handle ordering.
+RPC responses after moving host writes to EP0. `V0.5-friday-codex.9` removes
+Friday's voice memo functionality and was written to `ota_1` on 2026-09-07 with
+an exact independent readback and protected-region verification. The device then
+returned as the same native Codex Micro USB endpoint and produced valid RPC
+responses. Friday/Codex physical-button regression and two-Mac behavior remain
+separate acceptance checks. Existing Codex controls and inactive GATT
+placeholders are retained to preserve paired-host handle ordering.
+
+See [branch and release notes](docs/branches-and-releases.md) for the purpose,
+relationship, validation status, and recommended use of every maintained branch.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face
