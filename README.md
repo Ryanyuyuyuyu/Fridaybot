@@ -1,15 +1,17 @@
 # Friday + Codex Micro for M5Stack StopWatch
 
-Codex host switching is implemented in `V0.5-friday-codex.6`: one active Mac,
-a device picker, optional USB priority, and same-Mac Bluetooth fallback. See
-[host switching and verification](docs/codex-host-switching.md),
+Codex host switching is implemented through `V0.5-friday-codex.10`: one active
+Mac, manual switching between remembered computers, same-Mac USB priority and
+BLE fallback. See [all branches and feature updates](docs/branch-overview.md),
+[current host switching and verification](docs/codex-host-switching-low-power.md),
 [USB build configuration](docs/codex-usb-transport.md), and the
 [Mac identity/usage helper](companion/macos/host_identity/README.md).
 The `.8` deployment record confirms independent readback, boot, and native USB
-RPC responses after moving host writes to EP0. Physical controls and two-Mac
-behavior still require validation. The current `.9` candidate removes Friday's
-voice memo functionality and is not yet flashed. It retains the existing Codex
-controls and inactive GATT placeholders to preserve paired-host handle ordering.
+RPC responses after moving host writes to EP0. The deployed `.9` release removes
+Friday's voice memo functionality while retaining Codex controls and inactive
+GATT placeholders for paired-host handle compatibility. The `.10` source,
+tests and firmware candidate are complete; physical two-Mac switching remains
+a separate acceptance step.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face
