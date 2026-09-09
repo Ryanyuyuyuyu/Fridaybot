@@ -59,6 +59,8 @@ void AppFriday::onOpen()
     _host_accepted           = false;
     _departure_announced     = false;
     _face_visible            = true;
+    _portal_prewarm_active   = false;
+    _portal_prewarm_until_ms = now;
     _last_transfer_generation = friday::context::ContextLink::instance().transferSnapshot().generation;
 
     LvglLockGuard lock;
@@ -154,9 +156,8 @@ void AppFriday::updatePresenceTransfer(uint32_t nowMs)
                     _presence_state == PresenceState::AwaitingReturn)) {
             link.setTravelActive(true);
             _presence_state       = PresenceState::AwaitingReturn;
-            // The low-duty BLE link can take roughly two seconds per
-            // direction. ReturnBegin renews the lease so a long cross-display
-            // exit cannot race the HostHidden visibility barrier.
+            // ReturnBegin renews the lease so BLE scheduling plus a long
+            // cross-display exit cannot race the HostHidden visibility barrier.
             _transfer_deadline_ms = nowMs + 6500U;
             mclog::tagInfo(getAppInfo().name, "Mac return animation started, sequence {}",
                            transfer.transfer.sequence);
@@ -225,9 +226,44 @@ void AppFriday::updatePresenceTransfer(uint32_t nowMs)
     }
 }
 
+void AppFriday::updatePortalPrewarm(bool touchActive, float x, float y, uint32_t nowMs)
+{
+    auto& link = friday::context::ContextLink::instance();
+    if (_presence_state != PresenceState::Device) {
+        _portal_prewarm_active = false;
+        _portal_prewarm_until_ms = nowMs;
+        return;
+    }
+
+    bool portalCandidate = touchActive && std::fabs(x) >= PortalPrewarmEdge &&
+                           std::fabs(x) >= std::fabs(y);
+    if (portalCandidate) {
+        const auto snapshot = link.snapshot(nowMs);
+        const int8_t edgeDirection = x < 0.0f ? -1 : 1;
+        portalCandidate = snapshot.travelReady &&
+                          (!snapshot.fresh || snapshot.context.workDirection == 0 ||
+                           snapshot.context.workDirection == edgeDirection);
+    }
+
+    if (portalCandidate) {
+        _portal_prewarm_until_ms = nowMs + PortalPrewarmHoldMs;
+        if (!_portal_prewarm_active) {
+            _portal_prewarm_active = true;
+            // Negotiate the responsive BLE interval while the finger is still
+            // pressing into the portal, not after the release gesture.
+            link.setTravelActive(true);
+            mclog::tagInfo(getAppInfo().name, "portal link prewarmed");
+        }
+    } else if (_portal_prewarm_active &&
+               static_cast<int32_t>(nowMs - _portal_prewarm_until_ms) >= 0) {
+        _portal_prewarm_active = false;
+        link.setTravelActive(false);
+    }
+}
+
 bool AppFriday::tryStartPresenceTransfer(float x, float y, uint32_t nowMs)
 {
-    if (_presence_state != PresenceState::Device || std::fabs(x) < 0.90f ||
+    if (_presence_state != PresenceState::Device || std::fabs(x) < PortalActivationEdge ||
         std::fabs(x) < std::fabs(y)) {
         return false;
     }
@@ -258,10 +294,14 @@ bool AppFriday::tryStartPresenceTransfer(float x, float y, uint32_t nowMs)
     offer.startDelayMs  = 620;
     link.setTravelActive(true);
     if (!link.sendTransfer(offer)) {
+        _portal_prewarm_active = false;
+        _portal_prewarm_until_ms = nowMs;
         link.setTravelActive(false);
         return false;
     }
 
+    _portal_prewarm_active      = false;
+    _portal_prewarm_until_ms    = nowMs;
     _presence_state           = PresenceState::Departing;
     _transfer_started_ms      = nowMs;
     _transfer_deadline_ms     = nowMs + 4000U;
@@ -313,6 +353,8 @@ void AppFriday::beginPresenceReturn(uint32_t nowMs)
 {
     const float direction = _transfer_direction == friday::presence::Direction::Left ? -1.0f : 1.0f;
     _presence_state       = PresenceState::Returning;
+    _portal_prewarm_active = false;
+    _portal_prewarm_until_ms = nowMs;
     _face_visible         = true;
     _transfer_started_ms  = nowMs;
     _transfer_deadline_ms = nowMs + 1500U;
@@ -342,6 +384,8 @@ void AppFriday::onClose()
 
     _touch_active    = false;
     _gesture_pending = 0;
+    _portal_prewarm_active = false;
+    _portal_prewarm_until_ms = 0;
     _key_manager.reset();
     GetHAL().stopVibrate();
     friday::context::ContextLink::instance().setTravelActive(false);
@@ -372,6 +416,7 @@ void AppFriday::handleInputs(uint32_t nowMs)
     const bool touchActive = _touch_active.load(std::memory_order_acquire);
     const float touchX     = static_cast<float>(_touch_x_milli.load(std::memory_order_relaxed)) / 1000.0f;
     const float touchY     = static_cast<float>(_touch_y_milli.load(std::memory_order_relaxed)) / 1000.0f;
+    updatePortalPrewarm(touchActive, touchX, touchY, nowMs);
     if (_presence_state == PresenceState::Device || _presence_state == PresenceState::Returning) {
         _face_model.setTouchContact(touchActive, touchX, touchY, nowMs);
     } else {
@@ -389,27 +434,33 @@ void AppFriday::handleInputs(uint32_t nowMs)
         if (_presence_state == PresenceState::Host || _presence_state == PresenceState::Departing) {
             recallFromHost(nowMs);
         } else if (_presence_state == PresenceState::Device) {
-        switch (gesture) {
-            case friday::view::TouchGesture::Tap:
-                _face_model.react(friday::Reaction::Tap, nowMs, x, y);
-                break;
-            case friday::view::TouchGesture::Hold:
-                _face_model.react(friday::Reaction::Pet, nowMs, x, y);
-                break;
-            case friday::view::TouchGesture::Drag:
-                if (tryStartPresenceTransfer(x, y, nowMs)) {
+            switch (gesture) {
+                case friday::view::TouchGesture::Tap:
+                    _face_model.react(friday::Reaction::Tap, nowMs, x, y);
                     break;
-                }
-                if (std::fabs(x) >= 0.72f || std::fabs(y) >= 0.72f) {
-                    _face_model.react(friday::Reaction::EdgeBounce, nowMs, x, y);
-                } else {
-                    _face_model.react(friday::Reaction::DragRelease, nowMs, x, y);
-                }
-                break;
-            case friday::view::TouchGesture::Swipe:
-                _face_model.react(friday::Reaction::Swipe, nowMs, dx, dy);
-                break;
-        }
+                case friday::view::TouchGesture::Hold:
+                    _face_model.react(friday::Reaction::Pet, nowMs, x, y);
+                    break;
+                case friday::view::TouchGesture::Drag:
+                    if (tryStartPresenceTransfer(x, y, nowMs)) {
+                        break;
+                    }
+                    if (std::fabs(x) >= 0.72f || std::fabs(y) >= 0.72f) {
+                        _face_model.react(friday::Reaction::EdgeBounce, nowMs, x, y);
+                    } else {
+                        _face_model.react(friday::Reaction::DragRelease, nowMs, x, y);
+                    }
+                    break;
+                case friday::view::TouchGesture::Swipe:
+                    // A quick outward drag used to lose to the generic swipe
+                    // classifier, making the portal feel as if it only accepted a
+                    // slow, careful gesture. Edge intent outranks play here.
+                    if (x * dx > 0.08f && tryStartPresenceTransfer(x, y, nowMs)) {
+                        break;
+                    }
+                    _face_model.react(friday::Reaction::Swipe, nowMs, dx, dy);
+                    break;
+            }
         }
     }
 

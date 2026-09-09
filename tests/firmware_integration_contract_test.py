@@ -211,6 +211,15 @@ def test_single_bluetooth_host(root: Path, contract: Contract) -> None:
         "Friday transfer notifications must be sent through the shared Codex/Bluedroid service",
     )
 
+    interval_body = function_body(service, "void Service::Impl::updateFridayConnectionIntervals")
+    contract.require(bool(interval_body), "shared BLE service is missing Friday connection interval control")
+    for token, description in (
+        ("parameters.min_int = 128", "160 ms relaxed minimum interval"),
+        ("parameters.max_int = 192", "240 ms relaxed maximum interval"),
+        ("parameters.latency = 1", "single-event relaxed peripheral latency"),
+    ):
+        contract.require(token in interval_body, f"Friday BLE policy lost its {description}")
+
 
 def test_friday_gatt_and_advertising(root: Path, contract: Contract) -> None:
     gatt = read(root, "main/services/codex_micro/codex_micro_gatt_db.h")

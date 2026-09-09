@@ -35,6 +35,10 @@ there are no per-frame allocations or bitmap animation frames.
 - Drag all the way to an edge: both eyes are pushed against the bezel and
   visibly compacted; release uses a lower-damping spring to jump past centre
   and settle back into place.
+- When that edge is an active Mac portal, Friday starts warming the BLE link
+  before release. Both a deliberate drag and a quick outward swipe can enter;
+  the release target is wider than before while the opposite edge retains its
+  normal rubber bounce.
 - Swipe quickly in any direction: Friday chases the swipe, overshoots, then
   springs back. Gesture direction is preserved, and a successful chase leaves
   Friday in a short proud pose instead of snapping straight to idle.
@@ -60,6 +64,9 @@ there are no per-frame allocations or bitmap animation frames.
   portal edge to return. StopWatch B recalls it. A second return barrier
   prevents the face from reappearing locally until the Mac panel is
   fully hidden. Missing acknowledgements or BLE disconnects restore it safely.
+  On the Mac it also performs sparse edge patrols and can curl into a physical
+  display corner with a soft clipped-and-compressed resting pose. Active work
+  lengthens the quiet interval, and direct input always interrupts autonomy.
 - Hold both buttons: return to the original M5Stack launcher.
 - Leave it still: autonomous micro-saccades and blinking continue. Small
   curious/happy moments begin after roughly five to seven seconds. After ten

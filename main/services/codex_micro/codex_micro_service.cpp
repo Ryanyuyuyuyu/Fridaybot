@@ -2501,9 +2501,11 @@ void Service::Impl::updateFridayConnectionIntervals(bool active)
             parameters.max_int = 40;  // 50 ms
             parameters.latency = 0;
         } else {
-            parameters.min_int = 160;  // 200 ms
-            parameters.max_int = 320;  // 400 ms
-            parameters.latency = 3;
+            // Keep an idle Friday link economical without allowing peripheral
+            // latency to turn the first portal touch into a multi-second wait.
+            parameters.min_int = 128;  // 160 ms
+            parameters.max_int = 192;  // 240 ms
+            parameters.latency = 1;
         }
         parameters.timeout = 600;  // 6 seconds, in 10 ms units
         const esp_err_t error = esp_ble_gap_update_conn_params(&parameters);

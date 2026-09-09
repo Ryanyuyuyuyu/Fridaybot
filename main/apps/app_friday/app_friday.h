@@ -34,6 +34,9 @@ private:
 
     static constexpr uint32_t AnimationIntervalMs = 16;  // 62.5 Hz target
     static constexpr uint32_t ImuSampleIntervalMs = 30;  // 33 Hz; spring interpolation stays at 62.5 Hz
+    static constexpr float PortalActivationEdge = 0.82f;
+    static constexpr float PortalPrewarmEdge = 0.66f;
+    static constexpr uint32_t PortalPrewarmHoldMs = 1800;
 
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<friday::view::FaceView> _view;
@@ -65,10 +68,13 @@ private:
     bool _host_accepted            = false;
     bool _departure_announced      = false;
     bool _face_visible             = true;
+    bool _portal_prewarm_active    = false;
+    uint32_t _portal_prewarm_until_ms = 0;
 
     void updateImu(uint32_t nowMs);
     void updateCompanionContext(uint32_t nowMs);
     void updatePresenceTransfer(uint32_t nowMs);
+    void updatePortalPrewarm(bool touchActive, float x, float y, uint32_t nowMs);
     bool tryStartPresenceTransfer(float x, float y, uint32_t nowMs);
     void recallFromHost(uint32_t nowMs);
     void beginPresenceReturn(uint32_t nowMs);

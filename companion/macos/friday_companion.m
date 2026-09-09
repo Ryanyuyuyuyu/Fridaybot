@@ -711,6 +711,10 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
         _lastPrintedState = sample.state;
         _hasPrintedState = YES;
     }
+    // Keep autonomous desktop play sparse while the user is actively working
+    // or in a meeting. Direct click and drag interactions remain immediate.
+    [_overlay setWorkQuiet:sample.state == FridayHostStateWorking ||
+                           sample.state == FridayHostStateMeeting];
     [_bluetooth updateState:sample.state direction:_configuration.monitorDirection];
 }
 

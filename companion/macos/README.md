@@ -61,6 +61,19 @@ available on disk, and the former automatic audio cleanup no longer runs.
    connected Mac displays; drag it back to its original outer portal edge to
    send it home. A single StopWatch B button press also recalls it.
 
+After arriving, Friday now has a low-duty autonomous desktop life. It pauses
+for long stretches, makes an occasional two-step patrol along the nearest
+display edge, and after several unattended explorations can curl partly beyond
+a physical screen corner. The clipped orb, compressed near eye and slow
+pressure breathing make the bezel feel like a surface supporting a soft body.
+Clicking or dragging interrupts any autonomous movement immediately.
+
+The presence state also controls distraction: while the Mac reports `working`
+or `meeting`, patrols are limited to the nearest edge and spaced roughly 26–46
+seconds apart. During `uncertain` or `away` time they may cover more of the
+current display perimeter every 12–28 seconds. Friday never changes displays
+autonomously; crossing onto another monitor remains a deliberate user drag.
+
 The companion runs the full AppKit event loop while remaining an accessory app
 without a Dock icon. The transparent non-activating panel explicitly owns its
 hit region and mouse tracking session, so holding anywhere on Friday's circular

@@ -19,6 +19,7 @@ typedef NS_ENUM(uint8_t, FridayTravelDirection) {
 - (void)presentFromDirection:(FridayTravelDirection)direction
                         seed:(uint16_t)seed
                     sequence:(uint8_t)sequence;
+- (void)setWorkQuiet:(BOOL)workQuiet;
 - (void)returnToDevice;
 - (void)dismissImmediately;
 @end

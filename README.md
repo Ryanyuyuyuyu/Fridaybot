@@ -36,6 +36,8 @@ See [`companion/macos/README.md`](companion/macos/README.md) for optional Mac
 context and cross-display setup.
 See [`docs/cross-device-presence.md`](docs/cross-device-presence.md) for the
 implemented StopWatch-to-Mac travel protocol.
+See [`docs/requirements-backlog.md`](docs/requirements-backlog.md) for deferred
+product requirements that have been recorded but are not under development.
 
 ## Highlights
 
