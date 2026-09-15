@@ -13,14 +13,28 @@
 | `codex/remove-legacy-chat-mode` | `23e48fa` | 移除 Codex 内旧 Chat 仪表盘，只保留 Codex 控制面 | 已推送的精简基线 |
 | `codex/friday-flash-capsule` | `1e67fbd` | Friday“闪念胶囊”流式录音实验 | 已停用，不建议部署 |
 | `codex/single-host-usb-priority` | `dc350c3` | 单一活动 Mac、USB 原生传输、主机身份与登录启动 | `.6`—`.8` 历史部署线 |
-| `codex/remove-voice-memo` | `39fed12` | 完整移除 Friday 语音备忘录，保留 Codex 与其他 Friday 功能 | `.9` 已刷写并完成读回/USB 验证 |
-| `codex/host-switching-low-power` | `d2cd9f0` | 在 `.9` 上强化手动切换、状态一致性和助手低后台占用 | `.10` 已构建，尚未刷写 |
+| `codex/remove-voice-memo` | `39fed12` | 完整移除 Friday 语音备忘录，保留 Codex 与其他 Friday 功能 | `.9` 已刷写并完成读回/USB 验证；远端 tip 的独有内容仅为已吸收文档 |
+| `codex/host-switching-low-power` | `ba0f615` | 在 `.9` 上强化手动切换、状态一致性和助手低后台占用 | `.10` 历史候选；已被 `.11` 继承 |
+| `codex/friday-autonomy-portal` | `f8bf171` | Friday 桌面自主行为、Portal 预热与响应优化 | 当前 `.11` 候选集成线；真机稳定性未闭环 |
 
 演进关系：
 
 `main` → `friday-codex-dual-app` → `remove-legacy-chat-mode` →
 `friday-flash-capsule` → `single-host-usb-priority` →
-`remove-voice-memo` → `host-switching-low-power`
+`remove-voice-memo` → `host-switching-low-power` → `friday-autonomy-portal`
+
+## 当前收敛规则
+
+- `codex/friday-autonomy-portal` 是唯一继续开发的候选集成线；在真机验收完成前不合入
+  `main`，也不打正式发布 tag。
+- 其余远端功能分支保留为历史里程碑，不再逐支 merge 或 cherry-pick。它们除
+  `remove-voice-memo` 的文档旁支外，均已是 `.11` 的严格祖先。
+- `origin/codex/remove-voice-memo` 在 `39fed12` 后分出的两个提交只有发布文档；其中一条
+  已被等价吸收，另一条已被更新版本覆盖。合并该 tip 会把 README 状态退回旧版本。
+- 本地 `codex/friday-face` 是同一自主行为在旧独立 NimBLE 架构上的原型；`.11` 已将
+  该功能适配到共享 Codex BLE 服务，不能再合并旧原型。
+- `codex/friday-flash-capsule` 保留用于审计，但录音、转写和收件箱功能已明确撤销，
+  不得作为部署或恢复来源。
 
 ## `main`：Friday 与跨屏 Companion 基线
 
@@ -96,6 +110,23 @@
 
 更细的 `.10` 行为、工程验证、资源采样局限与双 Mac 验收矩阵见该分支中的
 [Codex 主机切换与低功耗](https://github.com/Ryanyuyuyuyu/Fridaybot/blob/codex/host-switching-low-power/docs/codex-host-switching-low-power.md)。
+
+## `codex/friday-autonomy-portal`：`.11` 候选集成线
+
+- 继承 `.10` 的手动主机选择、同机 USB/BLE 接续、状态隔离和低功耗身份助手。
+- Mac Companion 增加工作感知的 Friday 自主活动、屏幕边缘休息和即时打断。
+- StopWatch 的 Portal 加入触摸预热和快速外滑识别；空闲 Friday BLE 参数调整为
+  160—240 ms、latency 1，缩短首次交接等待。
+- 2026-09-15 复跑 16 组主机、协议、传输和 GATT 兼容测试全部通过，既有 40 个
+  GATT handles 保持不变。
+
+候选镜像为 4,365,040 字节，SHA-256 为
+`054931185efc806e2bbf4cd9229ec5082b92ada15cf9ab0104d9f600f0d68ca5`。
+2026-09-14 应用镜像仅写入设备的 `ota_0 @ 0x20000`，并更新必要的 OTA 选择元数据；
+独立读回与候选逐字节一致，非目标保护区一致，`ota_1` 中的 `.9` 回滚镜像保留。
+曾观察到一次正常启动和基础原生 RPC 响应，
+但设备随后回到下载/串口状态。稳定重启、身份/额度路由、实体 Friday/Codex 控制、
+Portal、睡眠唤醒和双 Mac 矩阵均未闭环，因此不能将 `.11` 标记为真机通过或正式发布。
 
 ## 部署与安全边界
 

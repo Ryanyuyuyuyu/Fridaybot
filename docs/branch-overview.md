@@ -12,7 +12,8 @@
 | `codex/friday-flash-capsule` | Friday A 键语音采集、BLE 流式传输、Mac 保存与转写原型 | 历史实验分支；实机体验未达到要求，后续 `.9` 已完整移除此功能 |
 | `codex/single-host-usb-priority` | `.8` 单活动 Mac、USB 优先、同机 BLE 回退、圆弧主机状态 UI | 第一代主机选择实现；已被 `.10` 的手动切换和低功耗修复扩展 |
 | `codex/remove-voice-memo` | `.9` 删除 Friday 语音备忘录链路 | 保留 Friday 其他功能、Codex 控制与 GATT handle 兼容；是 `.10` 的直接基线 |
-| `codex/host-switching-low-power` | `.10` 多 Mac 手动切换、同机 USB 优先、Agent 状态隔离、低功耗身份助手 | 当前最新功能分支；代码、构建及离线测试完成，实体双 Mac 验收单独进行 |
+| `codex/host-switching-low-power` | `.10` 多 Mac 手动切换、同机 USB 优先、Agent 状态隔离、低功耗身份助手 | 历史候选；已被 `.11` 继承 |
+| `codex/friday-autonomy-portal` | `.11` Friday 桌面自主行为、Portal 预热和低延迟交接 | 唯一候选集成线；刷写/读回完成，稳定真机验收未闭环 |
 
 ## `.9`：删除语音备忘录
 
@@ -46,3 +47,17 @@
 `.10` 的 16 组主机、传输、协议和兼容测试已通过，真实 LVGL 菜单输入测试通过，完整 ESP-IDF 5.5.4 构建和链接后 USB 描述检查通过。候选镜像为 4,364,624 字节，应用分区剩余 812,720 字节。
 
 这些结果不能代替实体双 Mac 验收。实机仍需依次验证单 BLE、双 BLE、同机 USB+BLE、工作 USB+私人 BLE、拔线回退、睡眠/唤醒、按住时切换，以及按键、摇杆和 Agent 状态是否始终属于选中的电脑。
+
+## `.11` 收敛状态
+
+`.11` 继承上述 `.10` 能力，并加入 Mac 端 Friday 自主行为、屏幕边缘休息、点击立即
+打断、StopWatch Portal 触摸预热和更灵敏的交接参数。2026-09-15 复跑 16 组离线测试
+全部通过，40 个 GATT handles 保持兼容。
+
+远端六条 `codex/*` 功能分支中，除 `remove-voice-memo` 的两个文档旁支提交外，均已是
+`.11` 的祖先；不应再次 merge。文档旁支内容已等价吸收或被更新版本覆盖。本地
+`codex/friday-face` 是旧 BLE 架构原型，也不应合入当前共享服务实现。
+
+`.11` 已完成目标 OTA 槽写入、逐字节读回和保护区核验，并保留 `.9` 回滚槽；但一次
+正常启动与基础 RPC 之后出现过下载/串口状态。完成稳定重启、身份/额度、实体交互、
+Portal 和双 Mac 验收前，不合入 `main`、不打 release tag，也不删除历史分支。

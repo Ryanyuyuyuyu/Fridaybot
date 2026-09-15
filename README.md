@@ -1,8 +1,10 @@
 # Friday + Codex Micro for M5Stack StopWatch
 
-Codex host switching is implemented through `V0.5-friday-codex.10`: one active
-Mac, manual switching between remembered computers, same-Mac USB priority and
-BLE fallback. See [all branches and feature updates](docs/branches-and-releases.md),
+The current integration candidate is `V0.5-friday-codex.11` on
+`codex/friday-autonomy-portal`. It carries forward one active Mac, manual
+switching between remembered computers, same-Mac USB priority and BLE fallback,
+then adds Friday autonomy and lower-latency portal handoff. See
+[all branches and feature updates](docs/branches-and-releases.md),
 [current host switching and verification](docs/codex-host-switching-low-power.md),
 [USB build configuration](docs/codex-usb-transport.md), and the
 [Mac identity/usage helper](companion/macos/host_identity/README.md).
@@ -12,9 +14,13 @@ Friday's voice memo functionality and was written to `ota_1` on 2026-09-07 with
 an exact independent readback and protected-region verification. The device then
 returned as the same native Codex Micro USB endpoint and produced valid RPC
 responses. Existing Codex controls and inactive GATT placeholders remain for
-paired-host handle compatibility. The `.10` source, tests, and firmware candidate
-are complete; physical Friday/Codex controls and two-Mac switching remain separate
-acceptance checks.
+paired-host handle compatibility. On 2026-09-14, the `.11` application image was
+written only to `ota_0` and independently read back byte-for-byte, with only the
+necessary OTA selection metadata updated; the `.9` rollback slot and all protected
+regions were retained. One normal boot and basic native
+RPC exchange were observed, but a later return to the download/serial state left
+stable reboot, identity/quota routing, physical controls, portal behavior, and
+two-Mac switching unaccepted. `.11` is therefore a candidate, not a release.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face
