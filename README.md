@@ -16,6 +16,79 @@ paired-host handle compatibility. The `.10` source, tests, and firmware candidat
 are complete; physical Friday/Codex controls and two-Mac switching remain separate
 acceptance checks.
 
+## Continue development on another Mac
+
+Use `codex/host-switching-low-power` for current Friday + Codex work. It contains
+the earlier dual-App integration, removal of the legacy Chat screen and Friday
+voice memo, native USB transport, single-active-host routing, manual Mac
+switching, and the low-duty Mac routing helper. The other maintenance and
+historical branches are also published on `origin`; their purpose and validation
+state are listed in [all branches and feature updates](docs/branches-and-releases.md).
+
+```sh
+git clone https://github.com/Ryanyuyuyuyu/Fridaybot.git
+cd Fridaybot
+git switch codex/host-switching-low-power
+git pull --ff-only
+```
+
+Do not copy a build directory from the previous Mac. Firmware development uses
+ESP-IDF 5.5.4, Python 3, and the ESP32-S3 target. The macOS routing helper
+requires macOS 13 or later and Xcode Command Line Tools. Run the offline
+host and helper checks after cloning:
+
+```sh
+./tests/run_host_tests.sh
+make -C companion/macos/host_identity
+make -C companion/macos/host_identity test
+```
+
+The helper package is generated at
+`companion/macos/host_identity/build/CodexHostIdentity.zip`. Install and run one
+copy on every Mac that should appear in the device menu; the exact install,
+login-start, naming, log, and uninstall commands are in the
+[Mac identity/usage helper README](companion/macos/host_identity/README.md).
+Use `Mac P` and `Mac W` as short labels if desired. Each Mac creates its own
+stable UUID locally. Do not copy
+`~/Library/Application Support/Friday/Codex Host Identity/host-id` between Macs
+or commit it to this repository.
+
+The expected routing rules are:
+
+| Available paths | Selected behavior |
+| --- | --- |
+| One Mac on both USB and BLE | Use USB after both identity and native Codex RPC are ready; unplugging USB falls back only to that Mac's BLE path. |
+| Work Mac on USB and private Mac on BLE | A newly attached USB host gets default priority only if no later manual choice overrides that attachment; a manual `Mac P` / `Mac W` choice remains selected even if it temporarily goes offline. |
+| Two Macs on BLE | Show both remembered Macs and send controls/status through only the manually selected Mac. |
+| Charge-only USB or USB enumeration without identity/RPC | Do not treat it as a controllable USB host. |
+| Selected Mac unavailable | Show that host as `Offline`; do not silently send controls to another Mac. |
+
+The screen's host label, `USB` / `BLE` / `Offline` transport, Agent state, quota,
+and button destination must all describe the same selected Mac. The helper only
+announces identity and reads a small quota snapshot; native Codex still handles
+the control RPC. Its scanning and refresh work backs off when idle, and it does
+not prevent sleep. Source tests do not replace a real two-Mac button, cable,
+sleep/wake, and power check.
+
+For a USB-capable firmware build, use the separate configuration and keep it in
+an ignored local directory:
+
+```sh
+python3 ./fetch_repos.py
+source "$IDF_PATH/export.sh"
+idf.py -B build-usb \
+  -D SDKCONFIG=build-usb/sdkconfig \
+  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.usb.defaults' build
+python3 tests/usb_configuration_descriptor_test.py build-usb/StopWatch-UserDemo.elf
+```
+
+These commands build and verify files only. They do not write the StopWatch.
+Local `build*` output, helper packages, hardware backups, flash dumps, device
+NVS, Mac identity files, and login settings are deliberately excluded from the
+Git handoff. The repository is the source handoff; the currently installed
+device remains the independently verified `.9` image, while `.10` is an
+unflashed candidate.
+
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face
 while preserving the upstream hardware evaluation apps.

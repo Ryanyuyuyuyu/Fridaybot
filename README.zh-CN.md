@@ -2,8 +2,10 @@
 
 [English](README.md)
 
-`V0.5-friday-codex.6` 新增单一 Mac 控制、设备选择、USB 优先与同机蓝牙回退。
-使用规则、圆屏截图和真机验收见 [设备切换说明](docs/codex-host-switching.md)。
+当前推荐开发线是 `codex/host-switching-low-power`，对应
+`V0.5-friday-codex.10` 候选。它提供单一活动 Mac、设备手动切换、同机 USB
+优先与 BLE 回退，并降低 Mac 路由助手在空闲时的后台工作。详细规则、工程验证和
+双 Mac 验收矩阵见 [主机切换与低功耗说明](docs/codex-host-switching-low-power.md)。
 USB 需要专用构建配置，并在每台 Mac 运行
 [身份与额度助手](companion/macos/host_identity/README.md)。`.8` 的部署记录已确认
 独立读回、启动和原生 USB RPC 响应。`V0.5-friday-codex.9` 已移除 Friday
@@ -18,6 +20,67 @@ GATT 属性占位及原有顺序均保留，以维持已配对主机的句柄兼
 
 所有维护分支的用途、继承关系、验证状态和推荐用法见
 [分支与版本说明](docs/branches-and-releases.md)。
+
+## 换一台 Mac 继续开发
+
+新电脑直接克隆远端并切到当前推荐分支。这个分支已经继承 Friday/Codex 双 App、
+旧 Chat 界面移除、Friday 语音备忘录移除、USB 原生传输、单一活动主机、手动 Mac
+切换和低后台占用助手；无需从旧电脑复制源码目录。
+
+```sh
+git clone https://github.com/Ryanyuyuyuyu/Fridaybot.git
+cd Fridaybot
+git switch codex/host-switching-low-power
+git pull --ff-only
+```
+
+不要复制旧 Mac 的构建目录。固件开发使用 ESP-IDF 5.5.4、Python 3 和 ESP32-S3
+target；Mac 路由助手需要 macOS 13 或更高版本及 Xcode Command Line Tools。
+克隆后先运行离线检查：
+
+```sh
+./tests/run_host_tests.sh
+make -C companion/macos/host_identity
+make -C companion/macos/host_identity test
+```
+
+助手安装包会生成在
+`companion/macos/host_identity/build/CodexHostIdentity.zip`。每台需要出现在设备
+菜单里的 Mac 都安装并运行一份；安装、登录启动、命名、查看日志和卸载命令见
+[身份与额度助手说明](companion/macos/host_identity/README.md)。可以把私人电脑设为
+`Mac P`、工作电脑设为 `Mac W`。每台 Mac 会在本机生成自己的稳定 UUID；不要把
+`~/Library/Application Support/Friday/Codex Host Identity/host-id` 复制到另一台
+电脑，也不要提交到 Git。
+
+设备选择遵循以下规则：
+
+| 当前连接 | 选择结果 |
+| --- | --- |
+| 同一台 Mac 同时有 USB 和 BLE | 身份与原生 Codex RPC 都就绪后使用 USB；拔线后只回到同一台 Mac 的 BLE。 |
+| 工作 Mac 用 USB、私人 Mac 用 BLE | 新接入的 USB 只在连接后没有更晚手选覆盖时取得默认优先；手选 `Mac P` 或 `Mac W` 后，即使它暂时离线也会保留选择。 |
+| 两台 Mac 都用 BLE | 菜单显示两台已记住的电脑，按键和状态只交给手动选中的一台。 |
+| 仅供电，或 USB 只有枚举而没有身份/RPC | 不把它视为可控制的 USB 主机。 |
+| 选中的 Mac 暂时不可用 | 显示该主机 `Offline`，不会静默把按键发给另一台电脑。 |
+
+屏幕上的主机名、`USB` / `BLE` / `Offline`、Agent 状态、额度和按键接收电脑必须
+属于同一个已选主机。助手只负责稳定身份和少量额度快照，控制 RPC 仍由原生 Codex
+处理。它在空闲时会降低扫描与刷新频率，也不会阻止 Mac 睡眠。源码测试不能替代
+真实双 Mac 的按键、拔插、睡眠/唤醒和功耗验收。
+
+需要 USB 的固件使用独立配置构建，并把产物留在 Git 已忽略的本地目录：
+
+```sh
+python3 ./fetch_repos.py
+source "$IDF_PATH/export.sh"
+idf.py -B build-usb \
+  -D SDKCONFIG=build-usb/sdkconfig \
+  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.usb.defaults' build
+python3 tests/usb_configuration_descriptor_test.py build-usb/StopWatch-UserDemo.elf
+```
+
+以上命令只构建和检查，不会写入 StopWatch。`build*` 产物、助手安装包、硬件备份、
+flash dump、设备 NVS、Mac 身份文件和登录启动设置都不会进入 Git 交接。远端仓库交接
+的是完整源码；当前真机仍是已独立验证的 `.9`，`.10` 仍是尚未刷写的候选版本。
 
 这个分支把 Friday 与兼容 Codex Micro 的控制界面做成 M5Stack StopWatch
 launcher 中两个相邻、互相独立的 App。冷启动先进入 launcher，可以直接选择
