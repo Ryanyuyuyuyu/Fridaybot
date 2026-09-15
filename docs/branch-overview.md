@@ -13,7 +13,7 @@
 | `codex/single-host-usb-priority` | `.8` 单活动 Mac、USB 优先、同机 BLE 回退、圆弧主机状态 UI | 第一代主机选择实现；已被 `.10` 的手动切换和低功耗修复扩展 |
 | `codex/remove-voice-memo` | `.9` 删除 Friday 语音备忘录链路 | 保留 Friday 其他功能、Codex 控制与 GATT handle 兼容；是 `.10` 的直接基线 |
 | `codex/host-switching-low-power` | `.10` 多 Mac 手动切换、同机 USB 优先、Agent 状态隔离、低功耗身份助手 | 历史候选；已被 `.11` 继承 |
-| `codex/friday-autonomy-portal` | `.11` Friday 桌面自主行为、Portal 预热和低延迟交接 | 唯一候选集成线；刷写/读回完成，稳定真机验收未闭环 |
+| `codex/friday-autonomy-portal` | `.11` Friday 桌面自主行为、Portal 预热和低延迟交接 | 唯一候选集成线；刷写/读回、稳定 USB RPC 与一次 Portal 往返已通过，完整矩阵未闭环 |
 
 ## `.9`：删除语音备忘录
 
@@ -58,6 +58,9 @@
 `.11` 的祖先；不应再次 merge。文档旁支内容已等价吸收或被更新版本覆盖。本地
 `codex/friday-face` 是旧 BLE 架构原型，也不应合入当前共享服务实现。
 
-`.11` 已完成目标 OTA 槽写入、逐字节读回和保护区核验，并保留 `.9` 回滚槽；但一次
-正常启动与基础 RPC 之后出现过下载/串口状态。完成稳定重启、身份/额度、实体交互、
-Portal 和双 Mac 验收前，不合入 `main`、不打 release tag，也不删除历史分支。
+`.11` 已完成目标 OTA 槽写入、逐字节读回和保护区核验，并保留 `.9` 回滚槽。一次早期
+启动后设备曾出现下载/串口状态；2026-09-15 普通重启后，同一 USB HID 会话和原生
+RPC 稳定超过 30 分钟。当前 Friday Companion 连接 context/travel 特征后，Portal
+入场、实体 B 召回和双向 visibility barrier 握手均完整通过。第一次 Portal 失败是
+Companion 未运行；它目前不会自动启动。普通身份/额度助手、其余实体交互、睡眠唤醒
+和双 Mac 矩阵仍待验收，因此不合入 `main`、不打 release tag，也不删除历史分支。

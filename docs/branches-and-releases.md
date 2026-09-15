@@ -15,7 +15,7 @@
 | `codex/single-host-usb-priority` | `dc350c3` | 单一活动 Mac、USB 原生传输、主机身份与登录启动 | `.6`—`.8` 历史部署线 |
 | `codex/remove-voice-memo` | `39fed12` | 完整移除 Friday 语音备忘录，保留 Codex 与其他 Friday 功能 | `.9` 已刷写并完成读回/USB 验证；远端 tip 的独有内容仅为已吸收文档 |
 | `codex/host-switching-low-power` | `ba0f615` | 在 `.9` 上强化手动切换、状态一致性和助手低后台占用 | `.10` 历史候选；已被 `.11` 继承 |
-| `codex/friday-autonomy-portal` | `f8bf171` | Friday 桌面自主行为、Portal 预热与响应优化 | 当前 `.11` 候选集成线；真机稳定性未闭环 |
+| `codex/friday-autonomy-portal` | `f8bf171` | Friday 桌面自主行为、Portal 预热与响应优化 | 当前 `.11` 候选集成线；刷写、稳定 USB RPC 与一次 Portal 往返已通过，完整矩阵未闭环 |
 
 演进关系：
 
@@ -124,9 +124,20 @@
 `054931185efc806e2bbf4cd9229ec5082b92ada15cf9ab0104d9f600f0d68ca5`。
 2026-09-14 应用镜像仅写入设备的 `ota_0 @ 0x20000`，并更新必要的 OTA 选择元数据；
 独立读回与候选逐字节一致，非目标保护区一致，`ota_1` 中的 `.9` 回滚镜像保留。
-曾观察到一次正常启动和基础原生 RPC 响应，
-但设备随后回到下载/串口状态。稳定重启、身份/额度路由、实体 Friday/Codex 控制、
-Portal、睡眠唤醒和双 Mac 矩阵均未闭环，因此不能将 `.11` 标记为真机通过或正式发布。
+曾观察到一次正常启动和基础原生 RPC 响应，但设备随后回到下载/串口状态。
+
+2026-09-15，用户执行普通重启后，设备恢复为相同的 Codex Micro USB HID。停止普通
+模式身份助手后，原生 `device.status` RPC 连续稳定超过 30 分钟且没有新增 HID 错误；
+同时运行 Friday Companion 不影响这条 USB 链路。Companion 0.7 发现当前 Friday
+service、context 与 travel characteristics，并完成以下用户可见的双向交接：
+
+`DeviceOffer → HostAccept → DeviceHidden → Mac 入场 → DeviceRecall（实体 B） → HostReturnBegin → HostHidden`
+
+第一次 Portal 尝试失败是因为 Friday Companion 未运行；当前仓库中的开发版没有自动
+启动配置，需要显式启动。普通身份/额度助手仍出现旧 BLE 特征缓存/额度读取超时，其余
+实体 Friday/Codex 控制、睡眠唤醒和双 Mac 矩阵也尚未闭环。因此这些证据允许将分支
+作为候选备份和审阅，但不能将 `.11` 标记为完整真机通过或正式发布，也不能合入
+`main`。
 
 ## 部署与安全边界
 

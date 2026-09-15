@@ -18,9 +18,17 @@ paired-host handle compatibility. On 2026-09-14, the `.11` application image was
 written only to `ota_0` and independently read back byte-for-byte, with only the
 necessary OTA selection metadata updated; the `.9` rollback slot and all protected
 regions were retained. One normal boot and basic native
-RPC exchange were observed, but a later return to the download/serial state left
-stable reboot, identity/quota routing, physical controls, portal behavior, and
-two-Mac switching unaccepted. `.11` is therefore a candidate, not a release.
+RPC exchange were initially observed before the device later appeared in the
+download/serial state. On 2026-09-15, an ordinary reset returned the same Codex
+Micro USB HID identity; native `device.status` RPCs then remained healthy for
+more than 30 minutes with no new HID error after the normal-mode identity helper
+was stopped. Friday Companion 0.7 connected to the current context and travel
+characteristics, and a user-observed Portal trip plus physical-B recall completed
+the full two-way visibility-barrier handshake. The first failed Portal attempt
+was traced to Friday Companion not running; this development helper still needs
+to be launched explicitly. Normal identity/quota-helper operation, the remaining
+physical controls, sleep/wake, and two-Mac switching remain unaccepted. `.11` is
+therefore still a candidate, not a release.
 
 Friday is an original, monochrome desk companion built on the M5Stack
 StopWatch user demo. It opens from the launcher into a responsive two-eye face

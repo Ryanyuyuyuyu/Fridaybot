@@ -33,6 +33,17 @@ from Activity Monitor by quitting `friday-companion`; Friday will return to
 local behaviour. Launch through `open` as shown above so macOS associates
 privacy permissions with the app bundle.
 
+The development companion is not installed as a login item or LaunchAgent. A
+StopWatch reset or OTA update does not start it on the Mac. If local Friday
+animations work but travel does not, first launch this app and confirm its
+diagnostic output reaches all of the following states before debugging firmware:
+
+```text
+[BLE] Connected
+[BLE] Context channel ready
+[BLE] Travel channel ready
+```
+
 Rebuilding this ad-hoc-signed development app can invalidate an earlier
 Bluetooth approval. If the log reports permission denied, allow Friday
 Companion in System Settings > Privacy & Security > Bluetooth.
