@@ -1,48 +1,60 @@
 # Fridaybot 分支与版本说明
 
-本文记录当前仓库内所有维护分支的用途、继承关系、主要功能和验证边界。
-分支代表连续的产品演进，不等于每个分支都建议部署。历史实验分支保留用于审计和回溯；
-面向当前硬件使用时，应优先选择已经完成相应验证的较新分支。
+本文记录维护分支和历史里程碑的用途、继承关系、主要功能和验证边界。
+2026-11-17 按用户要求收敛分支：`main` 整合 `.9` 源码，
+`codex/friday-autonomy-portal` 保留为唯一继续开发的 `.11` 候选线。
+这次源码整合及分支清理不包含设备刷写，也不增加任何真机验收结论。
 
 ## 分支总览
 
 | 分支 | 代表提交 | 主要用途 | 当前状态 |
 | --- | --- | --- | --- |
-| `main` | `54c5925` | Friday 本体、Mac Companion 与跨屏移动基线 | 稳定功能基线 |
-| `codex/friday-codex-dual-app` | `a0cf16e` | 将 Friday 与 Codex Micro 做成 launcher 内两个独立 App | 历史集成基线 |
-| `codex/remove-legacy-chat-mode` | `23e48fa` | 移除 Codex 内旧 Chat 仪表盘，只保留 Codex 控制面 | 已推送的精简基线 |
-| `codex/friday-flash-capsule` | `1e67fbd` | Friday“闪念胶囊”流式录音实验 | 已停用，不建议部署 |
-| `codex/single-host-usb-priority` | `dc350c3` | 单一活动 Mac、USB 原生传输、主机身份与登录启动 | `.6`—`.8` 历史部署线 |
-| `codex/remove-voice-memo` | `39fed12` | 完整移除 Friday 语音备忘录，保留 Codex 与其他 Friday 功能 | `.9` 已刷写并完成读回/USB 验证；远端 tip 的独有内容仅为已吸收文档 |
-| `codex/host-switching-low-power` | `ba0f615` | 在 `.9` 上强化手动切换、状态一致性和助手低后台占用 | `.10` 历史候选；已被 `.11` 继承 |
-| `codex/friday-autonomy-portal` | `f8bf171` | Friday 桌面自主行为、Portal 预热与响应优化 | 当前 `.11` 候选集成线；刷写、稳定 USB RPC 与一次 Portal 往返已通过，完整矩阵未闭环 |
+| `main` | `.9` 源码 `39fed12`，文档历史至 `1ad846b` | 双 App、Codex 控制、USB/主机身份及 Friday 无语音版 | 源码整合基线；不代表完整真机验收或正式发布 |
+| `codex/friday-autonomy-portal` | `.11` 源码 `f8bf171`，硬件记录 `2ba082d` | `.10` 主机切换、Friday 桌面自主行为、Portal 预热与响应优化 | 唯一候选开发线；完整真机矩阵完成前不合入 `main` |
+
+以下六个旧分支不再作为维护入口；其指针在确认全部历史由上述两条分支保全后清理。
+永久提交链接可继续用于审计，不依赖旧分支名存在。
+
+| 历史分支 | 保存的提交 | 主要用途 | 归属 |
+| --- | --- | --- | --- |
+| `codex/friday-codex-dual-app` | [`a0cf16e`](https://github.com/Ryanyuyuyuyu/Fridaybot/commit/a0cf16ef1b97c25a07e1d7d3416d2637484b81dc) | Friday 与 Codex 两个独立 App | `main` 与候选线历史 |
+| `codex/remove-legacy-chat-mode` | [`23e48fa`](https://github.com/Ryanyuyuyuyu/Fridaybot/commit/23e48facf34b160332e4c9bd1af33e52bbb1daa9) | 删除旧 Chat 仪表盘 | `main` 与候选线历史 |
+| `codex/friday-flash-capsule` | [`1e67fbd`](https://github.com/Ryanyuyuyuyu/Fridaybot/commit/1e67fbd2c6fea12c2eceaaf554dc5e772dc7ed9d) | 已撤销的流式录音实验 | 历史保留；`.9` 已完整移除，不用于部署 |
+| `codex/single-host-usb-priority` | [`dc350c3`](https://github.com/Ryanyuyuyuyu/Fridaybot/commit/dc350c39f74c60118aae0bbc44b8dbf5da9a5a01) | 单主机、原生 USB、身份助手 | `main` 与候选线历史 |
+| `codex/remove-voice-memo` | [`1ad846b`](https://github.com/Ryanyuyuyuyu/Fridaybot/commit/1ad846ba6bde7db83bc9ab9a6b5774dfce669ba2) | `.9` 移除语音及发布文档 | `main` 与候选线历史 |
+| `codex/host-switching-low-power` | [`199111d`](https://github.com/Ryanyuyuyuyu/Fridaybot/commit/199111d60be4e2c0e46b86e9446865a978430cec) | `.10` 主机切换、低后台工作和跨 Mac 交接文档 | 功能及独有文档均由 `.11` 候选线保全 |
 
 演进关系：
 
-`main` → `friday-codex-dual-app` → `remove-legacy-chat-mode` →
+历史 `main@54c5925` → `friday-codex-dual-app` → `remove-legacy-chat-mode` →
 `friday-flash-capsule` → `single-host-usb-priority` →
 `remove-voice-memo` → `host-switching-low-power` → `friday-autonomy-portal`
 
-## 当前收敛规则
+## 2026-11-17 收敛规则
 
 - `codex/friday-autonomy-portal` 是唯一继续开发的候选集成线；在真机验收完成前不合入
   `main`，也不打正式发布 tag。
-- 其余远端功能分支保留为历史里程碑，不再逐支 merge 或 cherry-pick。它们除
-  `remove-voice-memo` 的文档旁支外，均已是 `.11` 的严格祖先。
-- `origin/codex/remove-voice-memo` 在 `39fed12` 后分出的两个提交只有发布文档；其中一条
-  已被等价吸收，另一条已被更新版本覆盖。合并该 tip 会把 README 状态退回旧版本。
-- 本地 `codex/friday-face` 是同一自主行为在旧独立 NimBLE 架构上的原型；`.11` 已将
-  该功能适配到共享 Codex BLE 服务，不能再合并旧原型。
-- `codex/friday-flash-capsule` 保留用于审计，但录音、转写和收件箱功能已明确撤销，
+- `main` 快进整合 `.9` 的完整历史；其独立读回、启动与 USB RPC 证据不代替
+  Friday/Codex 实体按键、双 Mac、睡眠唤醒等尚未闭环的验收。
+- `.11` 已合并 `remove-voice-memo` 的文档旁支，并保留最新候选状态；
+  `host-switching-low-power` 独有的 `199111d` 跨 Mac 文档也已吸收，旧 `.10`
+  推荐分支及“设备仍为 `.9`”陈述已更新。合并不改变 `.11` 应用源码。
+- 六个旧功能分支的历史分别由 `main` 或候选线保全后，可删除本地和远端分支指针。
+  此规则替代此前保留所有历史分支名的安排；历史提交不会随分支清理丢失。
+- 历史记录中的 `codex/friday-face` 是旧独立 NimBLE 原型；`.11` 已将自主行为适配到
+  共享 Codex BLE 服务，不能再合并旧原型。
+- `codex/friday-flash-capsule` 仅作为历史提交供审计；录音、转写和收件箱已明确撤销，
   不得作为部署或恢复来源。
 
-## `main`：Friday 与跨屏 Companion 基线
+## `main`：`.9` 源码整合基线
 
 - 提供圆屏 Friday 角色、表情、触摸、姿态和自主动画。
 - 保留 M5Stack StopWatch 原厂 launcher 与评估 App。
 - Mac Companion 仅交换粗粒度在场状态，并支持 Friday 在 StopWatch 与 Mac 屏幕间移动。
 - 跨屏过程使用所有权交接，避免手表和 Mac 同时显示两个 Friday。
-- 不包含后续 Codex 双 App、USB 原生传输和多主机选择改造。
+- 已整合 Codex 双 App、旧 Chat 面板移除、原生 USB、第一代主机选择及 `.9` 语音移除。
+- 不包含 `.10` 手动切换修复和低后台助手、`.11` 自主行为及 Portal 优化。
+- 这是源码分支收敛，不是新的固件部署或完整硬件验收；保留既有实验性说明。
 
 ## `codex/friday-codex-dual-app`：Friday 与 Codex 分离
 
@@ -79,7 +91,7 @@
 - 最后提交让身份助手在 Mac 登录后受管理启动，解决重启后 USB 身份缺失导致控制不可用。
 - `.6`—`.8` 分别覆盖主机选择、USB 发现/恢复和 EP0 接收修复；`.8` 已完成独立读回、启动及原生 RPC 验证，但实体双 Mac 场景仍是独立验收项。
 
-## `codex/remove-voice-memo`：当前 `.9` 无语音版
+## 历史 `codex/remove-voice-memo`：`.9` 无语音版
 
 - 完整移除 Friday 录音采集、音频编码/流式发送、ACK/错误状态和录音成功动画。
 - 移除 Mac Companion 的音频接收、转录、闪念胶囊存储与收件箱界面。
@@ -109,7 +121,7 @@
 - 16 组主机/集成检查、完整 ESP-IDF 构建和 USB 描述验证已通过；候选镜像已生成，但本文更新时尚未刷写，不能把 `.9` 的真机结果当作 `.10` 验收。
 
 更细的 `.10` 行为、工程验证、资源采样局限与双 Mac 验收矩阵见该分支中的
-[Codex 主机切换与低功耗](https://github.com/Ryanyuyuyuyu/Fridaybot/blob/codex/host-switching-low-power/docs/codex-host-switching-low-power.md)。
+[Codex 主机切换与低功耗](https://github.com/Ryanyuyuyuyu/Fridaybot/blob/199111d60be4e2c0e46b86e9446865a978430cec/docs/codex-host-switching-low-power.md)。
 
 ## `codex/friday-autonomy-portal`：`.11` 候选集成线
 

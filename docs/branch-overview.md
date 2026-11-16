@@ -1,19 +1,21 @@
 # Fridaybot 分支与功能更新
 
-本文件记录当前本地分支的用途和关系。硬件完整备份、实机读取、烧录收据、构建缓存及本机身份配置不属于 Git 仓库，不会推送到远端。
+本文件记录维护分支的用途和历史关系。2026-11-17 按用户要求，将 `.9` 源码整合至
+`main`，保留 `.11` 为唯一候选开发线。源码整合不等于完整真机验收，也不包含刷写。
+硬件完整备份、实机读取、烧录收据、构建缓存及本机身份配置不属于 Git 仓库，不会推送到远端。
 
 ## 分支总览
 
 | 分支 | 主要功能 | 状态与关系 |
 | --- | --- | --- |
-| `main` | Friday Companion、跨设备 Travel 和基础 M5Stack StopWatch 启动器 | 稳定基线；不包含后续 Codex 专项实验 |
-| `codex/friday-codex-dual-app` | 将 Friday 与 Codex Micro 作为两个独立启动器应用 | 建立应用边界，避免两个产品入口和状态混在一起 |
-| `codex/remove-legacy-chat-mode` | 删除旧版 Codex Chat 仪表盘 | 保留 Agent A1–A6 控制面，减少重复入口 |
-| `codex/friday-flash-capsule` | Friday A 键语音采集、BLE 流式传输、Mac 保存与转写原型 | 历史实验分支；实机体验未达到要求，后续 `.9` 已完整移除此功能 |
-| `codex/single-host-usb-priority` | `.8` 单活动 Mac、USB 优先、同机 BLE 回退、圆弧主机状态 UI | 第一代主机选择实现；已被 `.10` 的手动切换和低功耗修复扩展 |
-| `codex/remove-voice-memo` | `.9` 删除 Friday 语音备忘录链路 | 保留 Friday 其他功能、Codex 控制与 GATT handle 兼容；是 `.10` 的直接基线 |
-| `codex/host-switching-low-power` | `.10` 多 Mac 手动切换、同机 USB 优先、Agent 状态隔离、低功耗身份助手 | 历史候选；已被 `.11` 继承 |
+| `main` | `.9` 双 App、Codex 控制、USB/主机身份、Friday 无语音版 | 源码整合基线；实体按键、双 Mac 等完整矩阵仍未闭环 |
 | `codex/friday-autonomy-portal` | `.11` Friday 桌面自主行为、Portal 预热和低延迟交接 | 唯一候选集成线；刷写/读回、稳定 USB RPC 与一次 Portal 往返已通过，完整矩阵未闭环 |
+
+六个历史功能分支分别是 `friday-codex-dual-app`、`remove-legacy-chat-mode`、
+`friday-flash-capsule`、`single-host-usb-priority`、`remove-voice-memo` 和
+`host-switching-low-power`（均有 `codex/` 前缀）。它们不再作为维护入口；确认全部历史
+由 `main` 与候选线保全后清理分支指针。各自功能及永久提交链接见
+[分支与版本说明](branches-and-releases.md)。已撤销的录音实验只保留历史，不恢复功能。
 
 ## `.9`：删除语音备忘录
 
@@ -54,13 +56,16 @@
 打断、StopWatch Portal 触摸预热和更灵敏的交接参数。2026-09-15 复跑 16 组离线测试
 全部通过，40 个 GATT handles 保持兼容。
 
-远端六条 `codex/*` 功能分支中，除 `remove-voice-memo` 的两个文档旁支提交外，均已是
-`.11` 的祖先；不应再次 merge。文档旁支内容已等价吸收或被更新版本覆盖。本地
-`codex/friday-face` 是旧 BLE 架构原型，也不应合入当前共享服务实现。
+`.11` 已继承六个历史功能分支的提交，并合并 `main` 的 `.9` 源码整合记录。
+`remove-voice-memo` 的两个文档旁支保留历史但以新版候选说明为准；
+`host-switching-low-power` 独有的 `199111d` 跨 Mac 交接文档已吸收并更新推荐分支与
+硬件边界。本次整合仅改文档，不改变 `.11` 应用源码。历史记录中的
+`codex/friday-face` 是旧 BLE 架构原型，不应合入当前共享服务实现。
 
 `.11` 已完成目标 OTA 槽写入、逐字节读回和保护区核验，并保留 `.9` 回滚槽。一次早期
 启动后设备曾出现下载/串口状态；2026-09-15 普通重启后，同一 USB HID 会话和原生
 RPC 稳定超过 30 分钟。当前 Friday Companion 连接 context/travel 特征后，Portal
 入场、实体 B 召回和双向 visibility barrier 握手均完整通过。第一次 Portal 失败是
 Companion 未运行；它目前不会自动启动。普通身份/额度助手、其余实体交互、睡眠唤醒
-和双 Mac 矩阵仍待验收，因此不合入 `main`、不打 release tag，也不删除历史分支。
+和双 Mac 矩阵仍待验收，因此 `.11` 不合入 `main`、不打 release tag。
+旧分支名可按本次收敛规则清理，历史提交继续由 `main` 与候选分支保留；这不改变真机门槛。
