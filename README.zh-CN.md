@@ -2,6 +2,11 @@
 
 [English](README.md)
 
+2026-11-17，`main` 已整合到 `.9` 无语音源码基线。`.10` 主机切换修复和 `.11`
+自主行为/Portal 继续保留在
+[`codex/friday-autonomy-portal`](https://github.com/Ryanyuyuyuyu/Fridaybot/tree/codex/friday-autonomy-portal)
+候选线，等待完整真机验收。本次是源码及分支整理，不是固件发布或完整硬件通过声明。
+
 `V0.5-friday-codex.6` 新增单一 Mac 控制、设备选择、USB 优先与同机蓝牙回退。
 使用规则、圆屏截图和真机验收见 [设备切换说明](docs/codex-host-switching.md)。
 USB 需要专用构建配置，并在每台 Mac 运行

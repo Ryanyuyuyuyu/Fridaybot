@@ -1,34 +1,43 @@
 # Fridaybot 分支与版本说明
 
-本文记录当前仓库内所有维护分支的用途、继承关系、主要功能和验证边界。
-分支代表连续的产品演进，不等于每个分支都建议部署。历史实验分支保留用于审计和回溯；
-面向当前硬件使用时，应优先选择已经完成相应验证的较新分支。
+## 当前维护线（2026-11-17）
 
-## 分支总览
+本次按用户要求整合源码并清理历史分支，只保留以下两条维护线。
 
-| 分支 | 代表提交 | 主要用途 | 当前状态 |
+| 分支 | 内容 | 验证边界 |
+| --- | --- | --- |
+| `main` | `.9` 无语音源码基线，继承至 `1ad846b` | 历史镜像刷写、独立读回、保护区、启动及 USB RPC 有记录；实体按键、双 Mac 和完整交互仍需验收 |
+| `codex/friday-autonomy-portal` | `.11` 唯一候选开发线，包含 `.10` 主机切换/低功耗与 `.11` 桌面自主行为/Portal | 保留候选；完整真机矩阵闭环前不合入 main、不标正式发布 |
+
+main 的收敛是源码整理，不代表完整硬件验收或新固件发布。本次不刷写设备，
+也不根据历史记录推断当前设备运行版本。
+
+`.11` 在 2026-09-15 的记录中已通过镜像读回、30 分钟以上 USB RPC 和一次 Portal
+往返；普通身份/额度助手仍有 BLE 缓存/读取超时，实体交互、睡眠唤醒与双 Mac 矩阵待验收。
+完整记录见[候选线说明](https://github.com/Ryanyuyuyuyu/Fridaybot/blob/codex/friday-autonomy-portal/docs/branches-and-releases.md)。
+
+## 已收敛的历史分支
+
+这些分支指针在本次清理中删除；提交历史由 main 或候选线保留，不恢复已撤销的录音功能。
+
+| 历史分支 | 原 tip | 用途 | 保存位置 |
 | --- | --- | --- | --- |
-| `main` | `54c5925` | Friday 本体、Mac Companion 与跨屏移动基线 | 稳定功能基线 |
-| `codex/friday-codex-dual-app` | `a0cf16e` | 将 Friday 与 Codex Micro 做成 launcher 内两个独立 App | 历史集成基线 |
-| `codex/remove-legacy-chat-mode` | `23e48fa` | 移除 Codex 内旧 Chat 仪表盘，只保留 Codex 控制面 | 已推送的精简基线 |
-| `codex/friday-flash-capsule` | `1e67fbd` | Friday“闪念胶囊”流式录音实验 | 已停用，不建议部署 |
-| `codex/single-host-usb-priority` | `dc350c3` | 单一活动 Mac、USB 原生传输、主机身份与登录启动 | `.6`—`.8` 历史部署线 |
-| `codex/remove-voice-memo` | `39fed12` | 完整移除 Friday 语音备忘录，保留 Codex 与其他 Friday 功能 | `.9` 已刷写并完成读回/USB 验证 |
-| `codex/host-switching-low-power` | `d2cd9f0` | 在 `.9` 上强化手动切换、状态一致性和助手低后台占用 | `.10` 已构建，尚未刷写 |
+| `codex/friday-codex-dual-app` | `a0cf16e` | Friday 与 Codex 独立 App | main 祖先链 |
+| `codex/remove-legacy-chat-mode` | `23e48fa` | 移除旧 Chat 仪表盘 | main 祖先链 |
+| `codex/friday-flash-capsule` | `1e67fbd` | 已撤销的闪念录音实验 | main 历史；当前功能已删除 |
+| `codex/single-host-usb-priority` | `dc350c3` | 单主机、原生 USB 与身份助手 | main 祖先链 |
+| `codex/remove-voice-memo` | `1ad846b` | `.9` 删除 Friday 语音备忘录 | 已整合进 main |
+| `codex/host-switching-low-power` | `199111d` | `.10` 手选主机、状态隔离、低后台助手和跨 Mac 交接 | 候选线继承代码并保留交接文档 |
 
-演进关系：
+## main：`.9` 无语音源码基线
 
-`main` → `friday-codex-dual-app` → `remove-legacy-chat-mode` →
-`friday-flash-capsule` → `single-host-usb-priority` →
-`remove-voice-memo` → `host-switching-low-power`
+- 保留 Friday 本体、Mac Companion、跨屏移动与原厂 launcher。
+- Friday 与 Codex Micro 是两个独立 App，共用一个 BLE 服务。
+- 包含单一活动 Mac、USB 原生传输、身份助手和同机 BLE 回退。
+- 删除旧 Chat 仪表盘和 Friday 语音备忘录；历史录音文件不被删除。
+- `.10` 的手选优先修复、低功耗助手与 `.11` 自主行为仍只在候选线。
 
-## `main`：Friday 与跨屏 Companion 基线
-
-- 提供圆屏 Friday 角色、表情、触摸、姿态和自主动画。
-- 保留 M5Stack StopWatch 原厂 launcher 与评估 App。
-- Mac Companion 仅交换粗粒度在场状态，并支持 Friday 在 StopWatch 与 Mac 屏幕间移动。
-- 跨屏过程使用所有权交接，避免手表和 Mac 同时显示两个 Friday。
-- 不包含后续 Codex 双 App、USB 原生传输和多主机选择改造。
+以下章节描述历史演进，不代表各旧分支仍在维护。
 
 ## `codex/friday-codex-dual-app`：Friday 与 Codex 分离
 
@@ -52,7 +61,7 @@
 - Mac 端原型包含流式接收、转录，以及待办/备忘统一收纳入口。
 - 录音限制、成功反馈和 BLE/GATT 兼容均在该实验线上迭代。
 - 真机测试中出现严重杂音和 A 键红灯但未形成可用语音输入的问题。
-- 产品决定已经撤销：该分支仅保留历史实现，不应作为当前固件部署目标。
+- 产品决定已经撤销：该实现仅保留在 Git 历史中，不应作为当前固件部署目标。
 
 ## `codex/single-host-usb-priority`：单主机与原生 USB
 
@@ -95,7 +104,7 @@
 - 16 组主机/集成检查、完整 ESP-IDF 构建和 USB 描述验证已通过；候选镜像已生成，但本文更新时尚未刷写，不能把 `.9` 的真机结果当作 `.10` 验收。
 
 更细的 `.10` 行为、工程验证、资源采样局限与双 Mac 验收矩阵见该分支中的
-[Codex 主机切换与低功耗](https://github.com/Ryanyuyuyuyu/Fridaybot/blob/codex/host-switching-low-power/docs/codex-host-switching-low-power.md)。
+[Codex 主机切换与低功耗](https://github.com/Ryanyuyuyuyu/Fridaybot/blob/codex/friday-autonomy-portal/docs/codex-host-switching-low-power.md)。
 
 ## 部署与安全边界
 

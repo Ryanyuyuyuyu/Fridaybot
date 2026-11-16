@@ -1,5 +1,11 @@
 # Friday + Codex Micro for M5Stack StopWatch
 
+`main` now contains the `.9` source baseline (consolidated on 2026-11-17).
+The `.10` host-switching refinements and `.11` autonomy/Portal work remain on
+[`codex/friday-autonomy-portal`](https://github.com/Ryanyuyuyuyu/Fridaybot/tree/codex/friday-autonomy-portal)
+until the full hardware acceptance matrix is complete. This source cleanup is
+not a firmware release or a claim of full physical-device validation.
+
 Codex host switching is implemented in `V0.5-friday-codex.6`: one active Mac,
 a device picker, optional USB priority, and same-Mac Bluetooth fallback. See
 [host switching and verification](docs/codex-host-switching.md),
